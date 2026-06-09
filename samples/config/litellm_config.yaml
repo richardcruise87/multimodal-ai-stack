@@ -1,0 +1,102 @@
+# =============================================================================
+# LiteLLM Proxy Configuration — Sample
+#
+# This file is a reference template. The setup script (samples/setup.py) copies
+# and adjusts this file into your stack directory based on your choices.
+#
+# To add more models, duplicate the relevant block and change model_name and
+# the litellm_params.model value.
+# =============================================================================
+
+model_list:
+
+  # ── Vertex AI: Gemini models ───────────────────────────────────────────────
+  - model_name: gemini-2-5-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: gemini-2-5-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  # ── Custom OpenAI-compatible endpoint (e.g. Ollama) ───────────────────────
+  # These entries are included only when a custom endpoint is configured.
+  # Duplicate and rename this block for additional local models.
+  - model_name: llama-local
+    litellm_params:
+      model: openai/llama3.3:70b
+      api_base: os.environ/CUSTOM_ENDPOINT_URL
+      api_key: os.environ/CUSTOM_ENDPOINT_KEY
+
+  - model_name: qwen-coder
+    litellm_params:
+      model: openai/qwen2.5-coder:32b
+      api_base: os.environ/CUSTOM_ENDPOINT_URL
+      api_key: os.environ/CUSTOM_ENDPOINT_KEY
+
+  # ── Routing group: "smart" ─────────────────────────────────────────────────
+  # Cost-based routing: tries the cheapest/fastest option first, falls back
+  # up the chain. The router_settings.fallbacks block handles the final
+  # fallback to gemini-2-5-pro.
+  #
+  # With a custom endpoint configured (local-first routing):
+  - model_name: smart
+    litellm_params:
+      model: openai/qwen2.5-coder:32b
+      api_base: os.environ/CUSTOM_ENDPOINT_URL
+      api_key: os.environ/CUSTOM_ENDPOINT_KEY
+
+  - model_name: smart
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+# Without a custom endpoint, remove the qwen entry above and keep only the
+# Gemini Flash smart entry. The router fallback to gemini-2-5-pro still applies.
+
+# =============================================================================
+# Router settings
+# =============================================================================
+router_settings:
+  routing_strategy: cost-based-routing
+  num_retries: 2
+  timeout: 60
+  fallbacks:
+    - {"smart": ["gemini-2-5-pro"]}
+
+  # Valkey for shared rate-limit state across restarts
+  redis_host: valkey
+  redis_port: 6379
+  redis_password: os.environ/VALKEY_PASSWORD
+
+# =============================================================================
+# General proxy settings
+# =============================================================================
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: "postgresql://os.environ/POSTGRES_USER:os.environ/POSTGRES_PASSWORD\
+    @postgres:5432/os.environ/POSTGRES_DB"
+
+# =============================================================================
+# Caching and observability
+# =============================================================================
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: valkey
+    port: 6379
+    password: os.environ/VALKEY_PASSWORD
+    ttl: 600         # cache responses for 10 minutes
+
+  # Langfuse observability — traces appear within seconds of a successful call
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
