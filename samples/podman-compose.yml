@@ -1,0 +1,143 @@
+# =============================================================================
+# Podman Compose — LiteLLM AI Stack
+#
+# Run from your stack directory (e.g. ~/ai-stack/):
+#   podman compose up -d
+#
+# Differences from Docker Compose:
+#   - restart: always  (Podman rootless handles this more reliably than
+#                       unless-stopped in some versions of podman-compose)
+#   - Ollama / custom endpoint URL should use host.containers.internal
+#     (not host.docker.internal) — set via CUSTOM_ENDPOINT_URL in .env
+#
+# Requires: .env, config/litellm_config.yaml, secrets/gcp-credentials.json
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL (LiteLLM spend tracking & virtual keys) ─────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Valkey (Redis-compatible: caching + rate-limit shared state) ────────────
+  valkey:
+    image: valkey/valkey:latest
+    restart: always
+    command: valkey-server --requirepass ${VALKEY_PASSWORD} --save 60 1 --loglevel warning
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── LiteLLM Proxy ──────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm-database:main-latest
+    restart: always
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config/litellm_config.yaml:/app/config.yaml:ro
+      - ./secrets/gcp-credentials.json:/secrets/gcp-credentials.json:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      VERTEX_LOCATION: ${VERTEX_LOCATION}
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+      CUSTOM_ENDPOINT_URL: ${CUSTOM_ENDPOINT_URL}
+      CUSTOM_ENDPOINT_KEY: ${CUSTOM_ENDPOINT_KEY}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Langfuse callback connection
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: http://langfuse-web:3000
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      langfuse-web:
+        condition: service_started
+
+  # ── Langfuse PostgreSQL (separate instance — do not conflate with LiteLLM's)
+  langfuse-postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_SECRET_KEY}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Langfuse (observability / trace logging) ────────────────────────────────
+  langfuse-web:
+    image: langfuse/langfuse:latest
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://langfuse:${LANGFUSE_SECRET_KEY}@langfuse-postgres:5432/langfuse"
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      SALT: ${SALT}
+      LANGFUSE_INIT_USER_EMAIL: admin@local.dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_ORG_NAME: local
+      LANGFUSE_INIT_PROJECT_NAME: litellm
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      REDIS_CONNECTION_STRING: redis://:${VALKEY_PASSWORD}@valkey:6379
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
+  # ── Open WebUI (browser chat interface) ────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - open_webui_data:/app/backend/data
+    environment:
+      # Route Open WebUI through LiteLLM for all model calls
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # Disable Ollama auto-detection — LiteLLM handles local models
+      ENABLE_OLLAMA_API: "false"
+      WEBUI_SECRET_KEY: ${NEXTAUTH_SECRET}
+    depends_on:
+      - litellm
+
+volumes:
+  postgres_data:
+  valkey_data:
+  langfuse_postgres_data:
+  open_webui_data:
