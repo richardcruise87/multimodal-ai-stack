@@ -19,7 +19,7 @@ import pytest
 # Load the module without executing main()
 # ---------------------------------------------------------------------------
 
-SETUP_PATH = Path(__file__).resolve().parents[1] / "samples" / "setup.py"
+SETUP_PATH = Path(__file__).resolve().parents[1] / "setup.py"
 
 
 def load_setup():

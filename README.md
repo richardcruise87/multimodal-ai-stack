@@ -27,9 +27,9 @@ configured), falls back to Gemini Flash, then Gemini Pro.
 ## Repository layout
 
 ```
+setup.py                        Interactive setup script
 docs/ai-stack-setup.md          Full setup guide (start here for manual setup)
 samples/
-  setup.py                      Interactive setup script
   podman-compose.yml            Podman Compose service definitions
   config/litellm_config.yaml    Reference LiteLLM proxy configuration
 ```
@@ -47,7 +47,7 @@ samples/
 ### 1. Run the setup script
 
 ```bash
-python samples/setup.py
+python setup.py
 ```
 
 The script will walk you through:
