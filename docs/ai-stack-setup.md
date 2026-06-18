@@ -62,7 +62,7 @@ cat > .env << 'EOF'
 LITELLM_MASTER_KEY=sk-litellm-master-changeme
 # Salt key: generate once, never change after first use
 # Generate with: openssl rand -hex 32
-LITELLM_SALT_KEY=your-salt-key-here
+LITELLM_SALT_KEY=<your-salt-key-here>
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 POSTGRES_USER=litellm
@@ -80,17 +80,17 @@ NEXTAUTH_SECRET=nextauth-secret-changeme
 SALT=langfuse-salt-changeme
 
 # ── GCP / Vertex AI ───────────────────────────────────────────────────────────
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-VERTEX_LOCATION=us-central1
+GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+VERTEX_LOCATION=<your-gcp-region>
 
 # ── Custom OpenAI-compatible endpoint (e.g. Ollama) ──────────────────────────
 # Leave blank if not using
 CUSTOM_ENDPOINT_URL=http://host.docker.internal:11434/v1
 CUSTOM_ENDPOINT_KEY=unused
 
-# ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────
-QWEN3_API_BASE=https://qwen3-14b.example.com/v1
-QWEN3_API_KEY=your-bearer-token-here
+# ── Qwen3-14B (custom external endpoint) ─────────────────────────────────────
+QWEN3_API_BASE=<your-qwen3-endpoint-here>
+QWEN3_API_KEY=<your-bearer-token-here>
 EOF
 ```
 
@@ -159,7 +159,7 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
-  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # ── Qwen3-14B (Custom external endpoint, OpenAI-compatible / vLLM) ─────────
   # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
   # Requests exceeding this will be routed to the fallback before being sent.
   - model_name: qwen3-14b
@@ -448,7 +448,7 @@ curl -s http://localhost:4000/chat/completions \
 Open `http://localhost:4000/ui` and log in with your master key.
 
 **Langfuse UI:**
-Open `http://localhost:3000` and log in with `admin@local.dev` / `changeme-example`. After a successful LiteLLM call, a trace should appear under your project within a few seconds.
+Open `http://localhost:3000` and log in with `admin@local.dev` / `<your-langfuse-admin-password>`. After a successful LiteLLM call, a trace should appear under your project within a few seconds.
 
 **Open WebUI:**
 Open `http://localhost:8080`. Create your admin account on first login. Models from LiteLLM will appear in the model selector automatically.
@@ -506,8 +506,8 @@ The returned `key` value (starts with `sk-`) can be used in OpenCode instead of 
 
     // ── Fallback: Vertex AI directly (bypasses LiteLLM) ─────────────────────
     // Use /connect to set up credentials, or set env vars:
-    //   GOOGLE_CLOUD_PROJECT=your-project-id
-    //   VERTEX_LOCATION=us-central1
+    //   GOOGLE_CLOUD_PROJECT=<your-project-id>
+    //   VERTEX_LOCATION=<your-gcp-region>
     //   GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-credentials.json
     "google-vertex": {}
   },
@@ -560,8 +560,8 @@ variables in your shell profile:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/ai-stack/secrets/gcp-credentials.json"
-export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
-export VERTEX_LOCATION="us-central1"
+export GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+export VERTEX_LOCATION=<your-gcp-region>
 ```
 
 Or use `/connect` in the OpenCode TUI and select **Google Vertex AI**.
@@ -597,7 +597,7 @@ docker compose up -d
 |---|---|---|
 | LiteLLM Proxy API | `http://localhost:4000` | Master key from `.env` |
 | LiteLLM Admin UI | `http://localhost:4000/ui` | Master key from `.env` |
-| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `changeme-example` |
+| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `<your-langfuse-admin-password>` |
 | Open WebUI | `http://localhost:8080` | First account becomes admin |
 | Valkey | `localhost:6379` | Password from `.env` |
 | PostgreSQL (LiteLLM) | `localhost:5432` | Credentials from `.env` |

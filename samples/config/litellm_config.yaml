@@ -61,7 +61,7 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
-  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # ── Qwen3-14B (external OpenAI-compatible / vLLM endpoint) ─────────────────
   # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
   # Requests exceeding this will be routed to the fallback before being sent.
   # Remove this block if you don't have access to this endpoint.
