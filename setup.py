@@ -173,7 +173,7 @@ def print_banner():
 
 
 def get_output_dir():
-    section("Step 1 of 7 — Output directory")
+    section("Step 1 of 8 — Output directory")
     default = str(Path.home() / "ai-stack")
     raw = prompt("Stack directory", default=default)
     out = Path(raw).expanduser().resolve()
@@ -191,7 +191,7 @@ def check_existing_env(out_dir):
     if not env_path.exists():
         return True  # nothing to worry about
 
-    section("Step 2 of 7 — Existing .env detected")
+    section("Step 2 of 8 — Existing .env detected")
     print(yellow(f"  Found existing .env at: {env_path}"))
     print()
     choice = prompt_choice(
@@ -216,7 +216,7 @@ def check_existing_env(out_dir):
 
 
 def setup_gcp_credentials(out_dir):
-    section("Step 3 of 7 — GCP credentials")
+    section("Step 3 of 8 — GCP credentials")
     secrets_dir = out_dir / "secrets"
     dest = secrets_dir / "gcp-credentials.json"
 
@@ -290,7 +290,7 @@ def setup_gcp_credentials(out_dir):
 
 
 def get_gcp_config():
-    section("Step 4 of 7 — GCP / Vertex AI project")
+    section("Step 4 of 8 — GCP / Vertex AI project")
     project = prompt("GOOGLE_CLOUD_PROJECT (your GCP project ID)")
     while not project:
         print(red("  Project ID cannot be empty."))
@@ -301,12 +301,41 @@ def get_gcp_config():
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — Custom endpoint (Ollama / local models)
+# Step 5 — Qwen3 endpoint
+# ---------------------------------------------------------------------------
+
+
+def get_qwen3_endpoint():
+    section("Step 5 of 8 — Qwen3-14B endpoint")
+    print(
+        textwrap.dedent("""\
+      LiteLLM can route requests to an external Qwen3-14B model served via a
+      vLLM / OpenAI-compatible endpoint. This is used as the primary model in
+      the 'smart' and 'build' routing groups.
+
+      If you skip this, 'smart' and 'build' will start with Gemini models instead.
+    """)
+    )
+
+    use_qwen3 = prompt_yes_no("Do you have a Qwen3-14B endpoint to configure?", default=False)
+    if not use_qwen3:
+        return None
+
+    url = prompt("Qwen3 API base URL (e.g. https://qwen3-14b.example.com/v1)")
+    while not url:
+        print(red("  URL cannot be empty."))
+        url = prompt("Qwen3 API base URL")
+    key = prompt("Qwen3 API key / bearer token", default="unused")
+    return {"url": url, "key": key}
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — Custom endpoint (Ollama / local models)
 # ---------------------------------------------------------------------------
 
 
 def get_custom_endpoint():
-    section("Step 5 of 7 — Local model endpoint (Ollama / custom)")
+    section("Step 6 of 8 — Local model endpoint (Ollama / custom)")
     print(
         textwrap.dedent("""\
       If you have a local model server (e.g. Ollama), LiteLLM can route
@@ -328,12 +357,12 @@ def get_custom_endpoint():
 
 
 # ---------------------------------------------------------------------------
-# Step 6 — Secret generation
+# Step 7 — Secret generation
 # ---------------------------------------------------------------------------
 
 
-def generate_secrets(custom_endpoint):
-    section("Step 6 of 7 — Secrets")
+def generate_secrets(custom_endpoint, qwen3_endpoint):
+    section("Step 7 of 8 — Secrets")
     print(
         textwrap.dedent("""\
       Generating random values for all secrets.
@@ -389,13 +418,13 @@ def generate_secrets(custom_endpoint):
         "LANGFUSE_INIT_USER_PASSWORD": langfuse_init_password,
         "CUSTOM_ENDPOINT_URL": custom_endpoint["url"] if custom_endpoint else "",
         "CUSTOM_ENDPOINT_KEY": custom_endpoint["key"] if custom_endpoint else "",
-        "QWEN3_API_BASE": "https://qwen3-14b.example.com/v1",
-        "QWEN3_API_KEY": "your-bearer-token-here",
+        "QWEN3_API_BASE": qwen3_endpoint["url"] if qwen3_endpoint else "",
+        "QWEN3_API_KEY": qwen3_endpoint["key"] if qwen3_endpoint else "",
     }
 
 
 # ---------------------------------------------------------------------------
-# Step 7 — Write files
+# Step 8 — Write files
 # ---------------------------------------------------------------------------
 
 
@@ -431,7 +460,7 @@ def write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint):
         f"CUSTOM_ENDPOINT_URL={sec['CUSTOM_ENDPOINT_URL']}",
         f"CUSTOM_ENDPOINT_KEY={sec['CUSTOM_ENDPOINT_KEY']}",
         "",
-        "# ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────",
+        "# ── Qwen3-14B (external OpenAI-compatible / vLLM endpoint) ────────────────────",
         f"QWEN3_API_BASE={sec['QWEN3_API_BASE']}",
         f"QWEN3_API_KEY={sec['QWEN3_API_KEY']}",
     ]
@@ -497,7 +526,7 @@ def build_litellm_config(custom_endpoint):
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
-  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # ── Qwen3-14B (external OpenAI-compatible / vLLM endpoint) ─────────────────
   # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
   # Requests exceeding this will be routed to the fallback before being sent.
   - model_name: qwen3-14b
@@ -723,7 +752,7 @@ def apply_gcp_credentials(gcp_creds, out_dir):
 # ---------------------------------------------------------------------------
 
 
-def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint):
+def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint):
     section("Setup complete — save these values")
 
     print(
@@ -749,9 +778,11 @@ def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint):
     row("GOOGLE_CLOUD_PROJECT", gcp_project)
     row("VERTEX_LOCATION", vertex_location)
 
+    if qwen3_endpoint:
+        row("QWEN3_API_BASE", qwen3_endpoint["url"])
     if custom_endpoint:
         row("CUSTOM_ENDPOINT_URL", custom_endpoint["url"])
-    else:
+    if not qwen3_endpoint and not custom_endpoint:
         print(
             f"\n  {yellow('smart model:')} routes Gemini Flash → Gemini Pro (no local endpoint configured)"
         )
@@ -805,11 +836,12 @@ def main():
     check_existing_env(out_dir)
     gcp_creds = setup_gcp_credentials(out_dir)
     gcp_project, vertex_location = get_gcp_config()
+    qwen3_endpoint = get_qwen3_endpoint()
     custom_endpoint = get_custom_endpoint()
-    sec = generate_secrets(custom_endpoint)
+    sec = generate_secrets(custom_endpoint, qwen3_endpoint)
 
     # Confirm before writing
-    section("Step 7 of 7 — Writing files")
+    section("Step 8 of 8 — Writing files")
     print(f"  Output directory: {cyan(str(out_dir))}")
     print()
     if not prompt_yes_no("Proceed and write all files?", default=True):
@@ -828,7 +860,7 @@ def main():
     write_compose(out_dir)
     write_gitignore(out_dir)
 
-    print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint)
+    print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint)
 
 
 if __name__ == "__main__":

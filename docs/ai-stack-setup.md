@@ -448,7 +448,7 @@ curl -s http://localhost:4000/chat/completions \
 Open `http://localhost:4000/ui` and log in with your master key.
 
 **Langfuse UI:**
-Open `http://localhost:3000` and log in with `admin@local.dev` / `changeme-example`. After a successful LiteLLM call, a trace should appear under your project within a few seconds.
+Open `http://localhost:3000` and log in with `admin@local.dev` / `<your-langfuse-admin-password>`. After a successful LiteLLM call, a trace should appear under your project within a few seconds.
 
 **Open WebUI:**
 Open `http://localhost:8080`. Create your admin account on first login. Models from LiteLLM will appear in the model selector automatically.
@@ -597,7 +597,7 @@ docker compose up -d
 |---|---|---|
 | LiteLLM Proxy API | `http://localhost:4000` | Master key from `.env` |
 | LiteLLM Admin UI | `http://localhost:4000/ui` | Master key from `.env` |
-| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `changeme-example` |
+| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `<your-langfuse-admin-password>` |
 | Open WebUI | `http://localhost:8080` | First account becomes admin |
 | Valkey | `localhost:6379` | Password from `.env` |
 | PostgreSQL (LiteLLM) | `localhost:5432` | Credentials from `.env` |

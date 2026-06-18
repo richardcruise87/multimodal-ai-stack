@@ -94,7 +94,7 @@ docker compose restart litellm
 |---|---|---|
 | LiteLLM API | `http://localhost:4000` | Master key from `.env` |
 | LiteLLM Admin UI | `http://localhost:4000/ui` | Master key from `.env` |
-| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `changeme-example` |
+| Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `<your-langfuse-admin-password>` |
 | Open WebUI | `http://localhost:8080` | First account becomes admin |
 
 ---
