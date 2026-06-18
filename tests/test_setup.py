@@ -175,7 +175,7 @@ SAMPLE_SECRETS = {
     "LANGFUSE_INIT_USER_PASSWORD": "lf-admin-pass",
     "CUSTOM_ENDPOINT_URL": "http://host.containers.internal:11434/v1",
     "CUSTOM_ENDPOINT_KEY": "unused",
-    "QWEN3_API_BASE": "https://qwen3-14b.example.com/v1",
+    "QWEN3_API_BASE": "https://qwen3.example.com",
     "QWEN3_API_KEY": "test-qwen3-key",
 }
 

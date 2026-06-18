@@ -62,7 +62,7 @@ cat > .env << 'EOF'
 LITELLM_MASTER_KEY=sk-litellm-master-changeme
 # Salt key: generate once, never change after first use
 # Generate with: openssl rand -hex 32
-LITELLM_SALT_KEY=your-salt-key-here
+LITELLM_SALT_KEY=<your-salt-key-here>
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 POSTGRES_USER=litellm
@@ -80,8 +80,8 @@ NEXTAUTH_SECRET=nextauth-secret-changeme
 SALT=langfuse-salt-changeme
 
 # ── GCP / Vertex AI ───────────────────────────────────────────────────────────
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-VERTEX_LOCATION=us-central1
+GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+VERTEX_LOCATION=<your-gcp-region>
 
 # ── Custom OpenAI-compatible endpoint (e.g. Ollama) ──────────────────────────
 # Leave blank if not using
@@ -89,8 +89,8 @@ CUSTOM_ENDPOINT_URL=http://host.docker.internal:11434/v1
 CUSTOM_ENDPOINT_KEY=unused
 
 # ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────
-QWEN3_API_BASE=https://qwen3-14b.example.com/v1
-QWEN3_API_KEY=your-bearer-token-here
+QWEN3_API_BASE=<your-qwen3-endpoint-here>
+QWEN3_API_KEY=<your-bearer-token-here>
 EOF
 ```
 
@@ -506,8 +506,8 @@ The returned `key` value (starts with `sk-`) can be used in OpenCode instead of 
 
     // ── Fallback: Vertex AI directly (bypasses LiteLLM) ─────────────────────
     // Use /connect to set up credentials, or set env vars:
-    //   GOOGLE_CLOUD_PROJECT=your-project-id
-    //   VERTEX_LOCATION=us-central1
+    //   GOOGLE_CLOUD_PROJECT=<your-project-id>
+    //   VERTEX_LOCATION=<your-gcp-region>
     //   GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-credentials.json
     "google-vertex": {}
   },
@@ -560,8 +560,8 @@ variables in your shell profile:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/ai-stack/secrets/gcp-credentials.json"
-export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
-export VERTEX_LOCATION="us-central1"
+export GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+export VERTEX_LOCATION=<your-gcp-region>
 ```
 
 Or use `/connect` in the OpenCode TUI and select **Google Vertex AI**.
