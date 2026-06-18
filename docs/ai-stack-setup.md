@@ -87,6 +87,10 @@ VERTEX_LOCATION=us-central1
 # Leave blank if not using
 CUSTOM_ENDPOINT_URL=http://host.docker.internal:11434/v1
 CUSTOM_ENDPOINT_KEY=unused
+
+# ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────
+QWEN3_API_BASE=https://qwen3-14b.example.com/v1
+QWEN3_API_KEY=your-bearer-token-here
 EOF
 ```
 
@@ -119,6 +123,52 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
+  # ── Anthropic Claude models (via Vertex AI) ────────────────────────────────
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-opus-4
+    litellm_params:
+      model: vertex_ai/claude-opus-4
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-opus-4-5
+    litellm_params:
+      model: vertex_ai/claude-opus-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
+  # Requests exceeding this will be routed to the fallback before being sent.
+  - model_name: qwen3-14b
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
   # ── Custom OpenAI-compatible endpoint (e.g. Ollama) ───────────────────────
   # Duplicate and rename this block for additional local endpoints
   - model_name: llama-local
@@ -133,8 +183,32 @@ model_list:
       api_base: os.environ/CUSTOM_ENDPOINT_URL
       api_key: os.environ/CUSTOM_ENDPOINT_KEY
 
+  # ── Routing group: "build" ─────────────────────────────────────────────────
+  # Used by the OpenCode build agent: tries Qwen3-14B first (free), falls back
+  # to Claude Sonnet 4.6 via router_settings.fallbacks.
+  - model_name: build
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: build
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
   # ── Routing group: "smart" ─────────────────────────────────────────────────
-  # Try local first, fall back to Vertex AI
+  # Cost-based routing: qwen3-14b first (free), then local Ollama, then Gemini Flash.
+  - model_name: smart
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
   - model_name: smart
     litellm_params:
       model: openai/qwen2.5-coder:32b
@@ -157,6 +231,11 @@ router_settings:
   timeout: 60
   fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
+    - {"build": ["claude-sonnet-4-6"]}
+  context_window_fallbacks:
+    - {"qwen3-14b": ["claude-sonnet-4-6"]}
+    - {"build": ["claude-sonnet-4-6"]}
+    - {"smart": ["gemini-2-5-pro"]}
 
   # Valkey for shared state (rate limiting, caching across restarts)
   redis_host: valkey
@@ -168,12 +247,13 @@ router_settings:
 # =============================================================================
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: "postgresql://os.environ/POSTGRES_USER:os.environ/POSTGRES_PASSWORD@postgres:5432/os.environ/POSTGRES_DB"
+  # database_url is passed via DATABASE_URL environment variable in compose
 
 # =============================================================================
 # Caching (using Valkey)
 # =============================================================================
 litellm_settings:
+  ssl_verify: false   # required for internal endpoints with self-signed certs
   cache: true
   cache_params:
     type: redis
@@ -245,6 +325,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      QWEN3_API_BASE: ${QWEN3_API_BASE}
+      QWEN3_API_KEY: ${QWEN3_API_KEY}
       # Langfuse connection for callbacks
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
@@ -276,7 +359,7 @@ services:
       retries: 5
 
   langfuse-web:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -285,13 +368,15 @@ services:
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       SALT: ${SALT}
-      LANGFUSE_INIT_USER_EMAIL: admin@local.dev
-      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
-      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_ORG_ID: local-org
       LANGFUSE_INIT_ORG_NAME: local
+      LANGFUSE_INIT_PROJECT_ID: litellm-project
       LANGFUSE_INIT_PROJECT_NAME: litellm
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: admin@local.dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+      LANGFUSE_INIT_USER_NAME: Admin
       REDIS_CONNECTION_STRING: redis://:${VALKEY_PASSWORD}@valkey:6379
     depends_on:
       langfuse-postgres:

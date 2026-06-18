@@ -389,6 +389,8 @@ def generate_secrets(custom_endpoint):
         "LANGFUSE_INIT_USER_PASSWORD": langfuse_init_password,
         "CUSTOM_ENDPOINT_URL": custom_endpoint["url"] if custom_endpoint else "",
         "CUSTOM_ENDPOINT_KEY": custom_endpoint["key"] if custom_endpoint else "",
+        "QWEN3_API_BASE": "https://qwen3-14b.example.com/v1",
+        "QWEN3_API_KEY": "your-bearer-token-here",
     }
 
 
@@ -428,6 +430,10 @@ def write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint):
         "# Leave blank if not using a local model endpoint.",
         f"CUSTOM_ENDPOINT_URL={sec['CUSTOM_ENDPOINT_URL']}",
         f"CUSTOM_ENDPOINT_KEY={sec['CUSTOM_ENDPOINT_KEY']}",
+        "",
+        "# ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────",
+        f"QWEN3_API_BASE={sec['QWEN3_API_BASE']}",
+        f"QWEN3_API_KEY={sec['QWEN3_API_KEY']}",
     ]
     env_path = out_dir / ".env"
     env_path.write_text("\n".join(lines) + "\n")
@@ -454,6 +460,52 @@ def build_litellm_config(custom_endpoint):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+
+  # ── Anthropic Claude models (via Vertex AI) ────────────────────────────────
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-opus-4
+    litellm_params:
+      model: vertex_ai/claude-opus-4
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-opus-4-5
+    litellm_params:
+      model: vertex_ai/claude-opus-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
+  # Requests exceeding this will be routed to the fallback before being sent.
+  - model_name: qwen3-14b
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
 """
 
     custom_model_block = """\
@@ -476,8 +528,15 @@ def build_litellm_config(custom_endpoint):
     smart_block_with_custom = """\
 
   # ── Routing group: "smart" ─────────────────────────────────────────────────
-  # Cost-based routing: tries local model first, falls back to Gemini Flash,
-  # then to Gemini Pro via router_settings.fallbacks.
+  # Cost-based routing: qwen3-14b first (free), then local Ollama model,
+  # then Gemini Flash, with a final fallback to Gemini Pro.
+  - model_name: smart
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
   - model_name: smart
     litellm_params:
       model: openai/qwen2.5-coder:32b
@@ -495,12 +554,38 @@ def build_litellm_config(custom_endpoint):
     smart_block_without_custom = """\
 
   # ── Routing group: "smart" ─────────────────────────────────────────────────
-  # No local endpoint configured. Routes: Gemini Flash → Gemini Pro.
-  # To add a local model later, add a smart entry with api_base pointing to
-  # your local endpoint above this block.
+  # Cost-based routing: qwen3-14b first (free), falls back to Gemini Flash,
+  # then to Gemini Pro via router_settings.fallbacks.
+  - model_name: smart
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
   - model_name: smart
     litellm_params:
       model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+"""
+
+    build_routing_block = """\
+
+  # ── Routing group: "build" ─────────────────────────────────────────────────
+  # Used by the OpenCode build agent: tries Qwen3-14B first (free), falls back
+  # to Claude Sonnet 4.6 via router_settings.fallbacks.
+  - model_name: build
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: build
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
@@ -517,6 +602,11 @@ router_settings:
   timeout: 60
   fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
+    - {"build": ["claude-sonnet-4-6"]}
+  context_window_fallbacks:
+    - {"qwen3-14b": ["claude-sonnet-4-6"]}
+    - {"build": ["claude-sonnet-4-6"]}
+    - {"smart": ["gemini-2-5-pro"]}
 
   # Valkey for shared rate-limit state across restarts
   redis_host: valkey
@@ -528,12 +618,13 @@ router_settings:
 # =============================================================================
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: "postgresql://os.environ/POSTGRES_USER:os.environ/POSTGRES_PASSWORD@postgres:5432/os.environ/POSTGRES_DB"
+  # database_url is passed via DATABASE_URL environment variable in compose
 
 # =============================================================================
 # Caching and observability
 # =============================================================================
 litellm_settings:
+  ssl_verify: false   # required for internal endpoints with self-signed certs
   cache: true
   cache_params:
     type: redis
@@ -562,6 +653,8 @@ model_list:
     parts = [header, vertex_model_block]
     if custom_endpoint:
         parts.append(custom_model_block)
+    parts.append(build_routing_block)
+    if custom_endpoint:
         parts.append(smart_block_with_custom)
     else:
         parts.append(smart_block_without_custom)

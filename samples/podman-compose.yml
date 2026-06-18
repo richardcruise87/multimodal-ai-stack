@@ -64,6 +64,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      QWEN3_API_BASE: ${QWEN3_API_BASE}
+      QWEN3_API_KEY: ${QWEN3_API_KEY}
       # Langfuse callback connection
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
@@ -95,7 +98,7 @@ services:
 
   # ── Langfuse (observability / trace logging) ────────────────────────────────
   langfuse-web:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     restart: always
     ports:
       - "3000:3000"
@@ -104,13 +107,15 @@ services:
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       SALT: ${SALT}
-      LANGFUSE_INIT_USER_EMAIL: admin@local.dev
-      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
-      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_ORG_ID: local-org
       LANGFUSE_INIT_ORG_NAME: local
+      LANGFUSE_INIT_PROJECT_ID: litellm-project
       LANGFUSE_INIT_PROJECT_NAME: litellm
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: admin@local.dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+      LANGFUSE_INIT_USER_NAME: Admin
       REDIS_CONNECTION_STRING: redis://:${VALKEY_PASSWORD}@valkey:6379
     depends_on:
       langfuse-postgres:

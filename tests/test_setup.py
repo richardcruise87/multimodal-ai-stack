@@ -175,6 +175,8 @@ SAMPLE_SECRETS = {
     "LANGFUSE_INIT_USER_PASSWORD": "lf-admin-pass",
     "CUSTOM_ENDPOINT_URL": "http://host.containers.internal:11434/v1",
     "CUSTOM_ENDPOINT_KEY": "unused",
+    "QWEN3_API_BASE": "https://qwen3-14b.example.com/v1",
+    "QWEN3_API_KEY": "test-qwen3-key",
 }
 
 
@@ -200,6 +202,12 @@ class TestWriteEnv:
         setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
         content = (tmp / ".env").read_text()
         assert "LITELLM_MASTER_KEY=sk-testkey123" in content
+
+    def test_qwen3_vars_written(self, setup, tmp):
+        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
+        content = (tmp / ".env").read_text()
+        assert "QWEN3_API_BASE=" in content
+        assert "QWEN3_API_KEY=test-qwen3-key" in content
 
     def test_env_ends_with_newline(self, setup, tmp):
         setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
