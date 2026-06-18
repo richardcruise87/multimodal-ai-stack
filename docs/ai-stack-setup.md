@@ -88,7 +88,7 @@ VERTEX_LOCATION=<your-gcp-region>
 CUSTOM_ENDPOINT_URL=http://host.docker.internal:11434/v1
 CUSTOM_ENDPOINT_KEY=unused
 
-# ── Qwen3-14B (internal Red Hat endpoint) ─────────────────────────────────────
+# ── Qwen3-14B (custom external endpoint) ─────────────────────────────────────
 QWEN3_API_BASE=<your-qwen3-endpoint-here>
 QWEN3_API_KEY=<your-bearer-token-here>
 EOF
@@ -159,7 +159,7 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
-  # ── Qwen3-14B (internal Red Hat endpoint, OpenAI-compatible / vLLM) ─────────
+  # ── Qwen3-14B (Custom external endpoint, OpenAI-compatible / vLLM) ─────────
   # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
   # Requests exceeding this will be routed to the fallback before being sent.
   - model_name: qwen3-14b
