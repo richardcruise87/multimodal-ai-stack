@@ -582,6 +582,7 @@ docker compose up -d
 
 | Symptom | Check |
 |---|---|
+| `401` on `curl localhost:4000/health` | `/health` always requires auth — use `curl localhost:4000/health/readiness` (no key needed) or pass `-H "Authorization: Bearer $LITELLM_MASTER_KEY"` |
 | LiteLLM 500 on Vertex calls | Verify `gcp-credentials.json` is mounted and the service account has `Vertex AI User` role |
 | Valkey auth errors | Confirm `VALKEY_PASSWORD` matches in `.env` and `litellm_config.yaml` |
 | No traces in Langfuse | Check `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` match between LiteLLM env and Langfuse init vars; check `docker compose logs litellm` for callback errors |
