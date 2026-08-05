@@ -1,6 +1,8 @@
 {
-  "_comment": "Copy to: ~/.config/opencode/opencode-langfuse.json  (chmod 600)",
-  "_comment2": "Keys must match LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in ~/ai-stack/.env",
+  "_readme": [
+    "Copy to: ~/.config/opencode/opencode-langfuse.json  (chmod 600)",
+    "Keys must match LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in ~/ai-stack/.env"
+  ],
 
   "publicKey": "lf-pk-<your-langfuse-public-key>",
   "secretKey": "<your-langfuse-secret-key>",
