@@ -798,3 +798,186 @@ class TestGenerateSecretsMergeMode:
         ]
         for key in required:
             assert key in result, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# AI harness configuration
+# ---------------------------------------------------------------------------
+
+_HARNESS_SEC = {
+    "LANGFUSE_PUBLIC_KEY": "lf-pk-testpublic",
+    "LANGFUSE_SECRET_KEY": "sk-testlangfusesecret",
+    "LITELLM_MASTER_KEY": "sk-testmaster123",
+}
+
+
+class TestAIHarnessConfig:
+    """Tests for write_opencode_langfuse_config, write_opencode_config,
+    write_claude_config, and backup_ai_harness_configs."""
+
+    # ── write_opencode_langfuse_config ───────────────────────────────────────
+
+    def test_langfuse_config_json_structure(self, setup, tmp):
+        """JSON file contains all expected keys with values from sec."""
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_langfuse_config(_HARNESS_SEC, "alice")
+
+        dest = tmp / ".config" / "opencode" / "opencode-langfuse.json"
+        assert dest.exists()
+
+        data = json.loads(dest.read_text())
+        assert data["publicKey"] == "lf-pk-testpublic"
+        assert data["secretKey"] == "sk-testlangfusesecret"
+        assert data["baseUrl"] == "http://localhost:3000"
+        assert data["environment"] == "development"
+        assert data["userId"] == "alice"
+
+    def test_langfuse_config_missing_keys_writes_placeholders(self, setup, tmp):
+        """Missing Langfuse keys produce placeholder strings, not KeyError."""
+        sec = {"LITELLM_MASTER_KEY": "sk-master"}
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_langfuse_config(sec, "bob")
+
+        dest = tmp / ".config" / "opencode" / "opencode-langfuse.json"
+        data = json.loads(dest.read_text())
+        assert "missing-from-env" in data["publicKey"]
+        assert "missing-from-env" in data["secretKey"]
+
+    def test_langfuse_config_chmod_600(self, setup, tmp):
+        """File permissions must be 0o600 (owner read/write only)."""
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_langfuse_config(_HARNESS_SEC, "alice")
+
+        dest = tmp / ".config" / "opencode" / "opencode-langfuse.json"
+        mode = dest.stat().st_mode & 0o777
+        assert mode == 0o600
+
+    def test_langfuse_config_creates_parent_dirs(self, setup, tmp):
+        """Parent directory ~/.config/opencode/ is created if absent."""
+        assert not (tmp / ".config").exists()
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_langfuse_config(_HARNESS_SEC, "alice")
+        assert (tmp / ".config" / "opencode").is_dir()
+
+    # ── write_opencode_config ────────────────────────────────────────────────
+
+    def test_opencode_config_copies_template(self, setup, tmp):
+        """opencode.jsonc is copied verbatim from samples/."""
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_config()
+
+        dest = tmp / ".config" / "opencode" / "opencode.jsonc"
+        assert dest.exists()
+        # The real sample file is referenced by the module constant
+        expected = setup.SAMPLE_OPENCODE.read_text()
+        assert dest.read_text() == expected
+
+    def test_opencode_config_creates_parent_dirs(self, setup, tmp):
+        """Parent directory is created if absent."""
+        assert not (tmp / ".config").exists()
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_opencode_config()
+        assert (tmp / ".config" / "opencode").is_dir()
+
+    # ── write_claude_config ──────────────────────────────────────────────────
+
+    def test_claude_config_substitutes_master_key(self, setup, tmp):
+        """LITELLM_MASTER_KEY placeholder is replaced with the real key."""
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_claude_config(_HARNESS_SEC)
+
+        dest = tmp / ".claude" / "settings.json"
+        assert dest.exists()
+
+        content = dest.read_text()
+        assert '"sk-testmaster123"' in content
+        assert "<your-litellm-master-key>" not in content
+
+    def test_claude_config_is_valid_json(self, setup, tmp):
+        """Written file must parse as valid JSON."""
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_claude_config(_HARNESS_SEC)
+
+        dest = tmp / ".claude" / "settings.json"
+        data = json.loads(dest.read_text())
+        assert data["env"]["ANTHROPIC_API_KEY"] == "sk-testmaster123"
+        assert data["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+
+    def test_claude_config_creates_parent_dirs(self, setup, tmp):
+        """~/.claude/ directory is created if absent."""
+        assert not (tmp / ".claude").exists()
+        with patch("pathlib.Path.home", return_value=tmp):
+            setup.write_claude_config(_HARNESS_SEC)
+        assert (tmp / ".claude").is_dir()
+
+    # ── backup_ai_harness_configs ────────────────────────────────────────────
+
+    def test_backup_opencode_incremental_numbering(self, setup, tmp):
+        """Backup suffix increments past existing .bak.N files."""
+        cfg_dir = tmp / ".config" / "opencode"
+        cfg_dir.mkdir(parents=True)
+        cfg = cfg_dir / "opencode.jsonc"
+        cfg.write_text("original")
+        # Pre-create .bak.1 and .bak.2
+        (cfg_dir / "opencode.jsonc.bak.1").write_text("b1")
+        (cfg_dir / "opencode.jsonc.bak.2").write_text("b2")
+
+        harness = {"opencode": {"enabled": True, "backup": True}}
+        with patch("pathlib.Path.home", return_value=tmp):
+            backed = setup.backup_ai_harness_configs(harness)
+
+        assert len(backed) == 1
+        assert backed[0].endswith("opencode.jsonc.bak.3")
+        assert (cfg_dir / "opencode.jsonc.bak.3").read_text() == "original"
+
+    def test_backup_skipped_when_flag_false(self, setup, tmp):
+        """No backup files are created when backup=False."""
+        cfg_dir = tmp / ".config" / "opencode"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "opencode.jsonc").write_text("content")
+
+        harness = {"opencode": {"enabled": True, "backup": False}}
+        with patch("pathlib.Path.home", return_value=tmp):
+            backed = setup.backup_ai_harness_configs(harness)
+
+        assert backed == []
+        assert not (cfg_dir / "opencode.jsonc.bak.1").exists()
+
+    def test_backup_both_harnesses(self, setup, tmp):
+        """All three candidate files are backed up when both harnesses request it."""
+        oc_dir = tmp / ".config" / "opencode"
+        oc_dir.mkdir(parents=True)
+        (oc_dir / "opencode.jsonc").write_text("oc")
+        (oc_dir / "opencode-langfuse.json").write_text("lf")
+
+        cl_dir = tmp / ".claude"
+        cl_dir.mkdir(parents=True)
+        (cl_dir / "settings.json").write_text("cl")
+
+        harness = {
+            "opencode": {"enabled": True, "backup": True},
+            "claude": {"enabled": True, "backup": True},
+        }
+        with patch("pathlib.Path.home", return_value=tmp):
+            backed = setup.backup_ai_harness_configs(harness)
+
+        assert len(backed) == 3
+        names = [Path(b).name for b in backed]
+        assert "opencode.jsonc.bak.1" in names
+        assert "opencode-langfuse.json.bak.1" in names
+        assert "settings.json.bak.1" in names
+
+    def test_backup_returns_empty_when_no_files_exist(self, setup, tmp):
+        """Empty list is returned when candidate files don't exist yet."""
+        harness = {
+            "opencode": {"enabled": True, "backup": True},
+            "claude": {"enabled": True, "backup": True},
+        }
+        with patch("pathlib.Path.home", return_value=tmp):
+            backed = setup.backup_ai_harness_configs(harness)
+
+        assert backed == []
+
+    def test_backup_none_harness_config_returns_empty(self, setup, tmp):
+        """Passing None returns an empty list without error."""
+        assert setup.backup_ai_harness_configs(None) == []

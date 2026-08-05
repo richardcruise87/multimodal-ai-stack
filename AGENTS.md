@@ -5,7 +5,7 @@
 A self-hosted AI inference stack. The repo contains:
 - `setup.py` — interactive Python script that generates the stack directory
 - `docs/ai-stack-setup.md` — full manual setup guide with copy-pasteable config blocks
-- `samples/` — reference `podman-compose.yml` and `config/litellm_config.yaml`
+- `samples/` — reference `podman-compose.yml`, `config/litellm_config.yaml`, and OpenCode configs
 - `tests/test_setup.py` — unit tests for pure functions in `setup.py`
 - `pyproject.toml` — project metadata, ruff config, pytest config
 
@@ -21,6 +21,9 @@ The stack itself lives **outside this repo** in `~/ai-stack/` (or wherever the u
 | `docs/ai-stack-setup.md` | Full manual guide with all config templates as heredocs |
 | `samples/podman-compose.yml` | Reference Compose file (copied into `~/ai-stack/` by setup) |
 | `samples/config/litellm_config.yaml` | Reference LiteLLM config (copied by setup) |
+| `samples/opencode.jsonc` | Reference OpenCode config (copy to `~/.config/opencode/opencode.jsonc`) |
+| `samples/opencode-langfuse.json` | Reference Langfuse plugin credentials (copy to `~/.config/opencode/opencode-langfuse.json`, chmod 600) |
+| `samples/claude-settings.json` | Reference Claude Code settings (copy to `~/.claude/settings.json`) |
 | `tests/test_setup.py` | Unit tests for `setup.py` pure functions |
 | `~/ai-stack/.env` | All secrets — never commit |
 | `~/ai-stack/secrets/gcp-credentials.json` | GCP service account key — never commit |
@@ -144,3 +147,24 @@ podman compose restart litellm          # if LiteLLM fails because Postgres wasn
 **`LANGFUSE_SECRET_KEY`** doubles as the langfuse-postgres password — one variable, two roles.
 
 **Troubleshooting:** No traces in Langfuse → check `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` match between LiteLLM env and Langfuse init vars; check `podman compose logs litellm` for callback errors. Open WebUI shows no models → confirm `OPENAI_API_KEY` on `open-webui` container matches `LITELLM_MASTER_KEY`.
+
+---
+
+## OpenCode Langfuse observability
+
+Two independent Langfuse integrations run simultaneously in the same Langfuse project:
+
+| Integration | What it traces | Source |
+|---|---|---|
+| LiteLLM `success_callback: ["langfuse"]` | Per-completion cost, model, tokens, routing group | `litellm_config.yaml` |
+| `@langfuse/opencode-observability-plugin` | Full session structure: turns, generations, tool calls, reasoning, compaction | OpenCode plugin |
+
+The plugin is the richer source — it shows the full agentic loop. LiteLLM's callback is the cost source of truth.
+
+**OpenCode config** (`~/.config/opencode/opencode.jsonc`): see `samples/opencode.jsonc` for the full reference config including all routing groups, agent assignments, and provider definitions.
+
+**Plugin credentials** (`~/.config/opencode/opencode-langfuse.json`, chmod 600): see `samples/opencode-langfuse.json`. Fill in your keys from `~/ai-stack/.env` and set `baseUrl` to the **self-hosted** instance (`http://localhost:3000`), not `cloud.langfuse.com`.
+
+The plugin is installed automatically by OpenCode via Bun at startup. No manual `npm install` is needed.
+
+**Cost tracking note:** LiteLLM's pricing DB has no entries for `vertex_ai/gemini-2.5-flash-preview-04-17`, `vertex_ai/gemini-2.5-pro` (direct key), or `openai/Qwen/Qwen3-14B`. Explicit `input_cost_per_token`/`output_cost_per_token` overrides are set on every affected `litellm_params` block in `litellm_config.yaml` to prevent `$0` cost in Langfuse.

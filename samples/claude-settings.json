@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "_readme": [
+    "Claude Code settings for the multimodal-ai-stack.",
+    "Copy to: ~/.claude/settings.json",
+    "",
+    "Routes all Claude Code traffic through the local LiteLLM proxy (port 4000).",
+    "LiteLLM handles model routing, fallbacks, cost tracking, and Langfuse",
+    "observability automatically — no Claude Code-side plugin is needed.",
+    "",
+    "Prerequisites:",
+    "  - Stack running: podman compose up -d  (from ~/ai-stack/)",
+    "  - Replace ANTHROPIC_API_KEY value below with your LITELLM_MASTER_KEY",
+    "    from ~/ai-stack/.env",
+    "",
+    "Model selection:",
+    "  Use /model inside Claude Code to switch between routing groups.",
+    "  ANTHROPIC_DEFAULT_SONNET_MODEL and ANTHROPIC_DEFAULT_HAIKU_MODEL below",
+    "  set the default model for the main and background-task roles respectively.",
+    "  All routing, fallbacks, and cost tracking are handled by LiteLLM.",
+    "",
+    "Observability:",
+    "  Completions are traced to Langfuse (http://localhost:3000) automatically",
+    "  via LiteLLM's success_callback — no extra Claude Code configuration needed.",
+    "",
+    "Available LiteLLM model aliases:",
+    "  Routing groups:",
+    "    smart            - Qwen3-14B -> Ollama -> Gemini Flash -> Gemini Pro",
+    "    build            - Qwen3-14B (40k ctx limit) -> Claude Sonnet 4.6",
+    "    smart-compressed - smart + Headroom token compression",
+    "    build-compressed - build + Headroom token compression",
+    "  Individual models:",
+    "    claude-sonnet-4-6, claude-sonnet-4-5, claude-opus-4, claude-opus-4-5,",
+    "    claude-haiku-4-5, gemini-2-5-pro, gemini-2-5-flash,",
+    "    qwen3-14b (if Qwen endpoint configured),",
+    "    llama-local, qwen-coder (if custom endpoint configured)"
+  ],
+
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:4000",
+
+    "ANTHROPIC_API_KEY": "sk-<your-litellm-master-key>",
+
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "build",
+
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gemini-2-5-flash"
+  }
+}
