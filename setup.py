@@ -600,6 +600,10 @@ def get_headroom_config(existing_secrets: Optional[Dict] = None):
     Always prompts (no .env marker stored) — compose is the runtime source of
     truth.  In merge mode a shorter description is shown since the user is
     already familiar with the stack.
+
+    Note: users upgrading a stack that already has Headroom enabled will see
+    this prompt on every merge run.  This is intentional — it lets them toggle
+    Headroom on or off during any upgrade without storing extra state in .env.
     """
     section("Step 7 of 9 — Headroom token compression (optional)")
 
@@ -1100,8 +1104,19 @@ model_list:
             '    - {"smart-compressed": ["gemini-2-5-pro"]}\n'
             '    - {"build-compressed": ["claude-sonnet-4-6"]}\n'
         )
-        extra_cwfallbacks = '    - {"build-compressed": ["claude-sonnet-4-6"]}\n'
+        extra_cwfallbacks = (
+            '    - {"build-compressed": ["claude-sonnet-4-6"]}\n'
+            '    - {"smart-compressed": ["gemini-2-5-pro"]}\n'
+        )
 
+    # The router block is split into three string literals so that conditional
+    # fallback lines (extra_fallbacks, extra_cwfallbacks) can be injected in
+    # the correct positions without format-string brace escaping:
+    #   router_settings_header  — routing_strategy … fallbacks (base entries)
+    #   extra_fallbacks         — compressed-group fallbacks (headroom only)
+    #   router_settings_footer  — context_window_fallbacks (base entries)
+    #   extra_cwfallbacks       — compressed-group cwfallbacks (headroom only)
+    #   router_settings_end     — smart cwfallback + redis config
     router_and_settings = (
         router_settings_header
         + extra_fallbacks

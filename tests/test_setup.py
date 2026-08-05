@@ -398,8 +398,15 @@ class TestBuildLitellmConfigHeadroom:
         assert '"smart-compressed": ["gemini-2-5-pro"]' in config
 
     def test_headroom_adds_compressed_cwfallbacks(self, setup):
+        yaml = pytest.importorskip("yaml")
         config = setup.build_litellm_config(None, headroom=HEADROOM)
         assert '"build-compressed": ["claude-sonnet-4-6"]' in config
+        assert '"smart-compressed": ["gemini-2-5-pro"]' in config
+        parsed = yaml.safe_load(config)
+        cwf = parsed["router_settings"]["context_window_fallbacks"]
+        keys = [list(entry.keys())[0] for entry in cwf]
+        assert "build-compressed" in keys
+        assert "smart-compressed" in keys
 
     def test_headroom_with_custom_smart_compressed_has_local_entry(self, setup):
         config = setup.build_litellm_config(CUSTOM, headroom=HEADROOM)

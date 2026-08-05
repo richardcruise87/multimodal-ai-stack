@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       langfuse-web:
         condition: service_started
+      headroom:
+        condition: service_healthy
 
   # ── Langfuse PostgreSQL (separate instance — do not conflate with LiteLLM's)
   langfuse-postgres:
@@ -142,6 +144,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # ── Open WebUI (browser chat interface) ────────────────────────────────────
   open-webui:
