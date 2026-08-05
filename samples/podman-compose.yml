@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       langfuse-web:
         condition: service_started
+      headroom:
+        condition: service_healthy
 
   # ── Langfuse PostgreSQL (separate instance — do not conflate with LiteLLM's)
   langfuse-postgres:
@@ -123,6 +125,27 @@ services:
       valkey:
         condition: service_healthy
 
+  # ── Headroom (token compression sidecar — optional) ───────────────────
+  # Compresses prompts before they reach the LLM. Registered in LiteLLM as
+  # a guardrail; use model "build-compressed" or "smart-compressed" to opt in.
+  # Remove this service and the headroom_cache volume if not using Headroom.
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    restart: always
+    ports:
+      - "8787:8787"
+    environment:
+      HEADROOM_TELEMETRY: "off"
+    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    volumes:
+      - headroom_cache:/app/.headroom
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   # ── Open WebUI (browser chat interface) ────────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -146,3 +169,4 @@ volumes:
   valkey_data:
   langfuse_postgres_data:
   open_webui_data:
+  headroom_cache:

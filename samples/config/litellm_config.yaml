@@ -104,6 +104,24 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
+  # ── Routing group: "build-compressed" ─────────────────────────────────────
+  # Same models as "build" but with Headroom token compression applied as a
+  # pre_call guardrail. Requires the Headroom service to be running.
+  # Use this model alias when you want automatic prompt compression.
+  - model_name: build-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: build-compressed
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
   # ── Routing group: "smart" ─────────────────────────────────────────────────
   # Cost-based routing: tries the cheapest/fastest option first, falls back
   # up the chain. The router_settings.fallbacks block handles the final
@@ -131,8 +149,31 @@ model_list:
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
 
-# Without a custom endpoint, remove the qwen entry above and keep only the
-# Gemini Flash smart entry. The router fallback to gemini-2-5-pro still applies.
+  # ── Routing group: "smart-compressed" ─────────────────────────────────────
+  # Same models as "smart" but with Headroom token compression applied.
+  # Requires the Headroom service to be running.
+  - model_name: smart-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: openai/qwen2.5-coder:32b
+      api_base: os.environ/CUSTOM_ENDPOINT_URL
+      api_key: os.environ/CUSTOM_ENDPOINT_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+# Without a custom endpoint, remove the qwen/custom entries above and keep only
+# the Gemini Flash smart entry. The router fallback to gemini-2-5-pro still applies.
 
 # =============================================================================
 # Router settings
@@ -144,15 +185,36 @@ router_settings:
   fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
+    - {"smart-compressed": ["gemini-2-5-pro"]}
+    - {"build-compressed": ["claude-sonnet-4-6"]}
   context_window_fallbacks:
     - {"qwen3-14b": ["claude-sonnet-4-6"]}
     - {"build": ["claude-sonnet-4-6"]}
+    - {"build-compressed": ["claude-sonnet-4-6"]}
     - {"smart": ["gemini-2-5-pro"]}
+    - {"smart-compressed": ["gemini-2-5-pro"]}
 
   # Valkey for shared rate-limit state across restarts
   redis_host: valkey
   redis_port: 6379
   redis_password: os.environ/VALKEY_PASSWORD
+
+# =============================================================================
+# Guardrails
+# =============================================================================
+# Headroom runs as a sidecar service (port 8787) and compresses prompts before
+# they reach the LLM. It is registered here as a pre_call guardrail.
+# Use routing groups "build-compressed" or "smart-compressed" to opt in, or
+# attach the guardrail to a virtual key via the LiteLLM Admin UI / API.
+# Remove this section if the Headroom service is not running.
+guardrails:
+  - guardrail_name: headroom-compression
+    litellm_params:
+      guardrail: headroom
+      mode: pre_call
+      api_base: http://headroom:8787
+      # api_key: os.environ/HEADROOM_API_KEY  # optional — if you add auth to Headroom
+      default_on: false  # opt-in only; set true to compress every request
 
 # =============================================================================
 # General proxy settings

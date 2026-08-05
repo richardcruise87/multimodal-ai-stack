@@ -568,12 +568,291 @@ Or use `/connect` in the OpenCode TUI and select **Google Vertex AI**.
 
 ---
 
-## Step 10: Updating the Stack
+## Step 10: Headroom Token Compression (Optional)
+
+[Headroom](https://headroom-docs.vercel.app/docs) is a local token compression service that reduces input token costs by 15–95% depending on content type (code, JSON, logs, prose). It runs as a sidecar container alongside LiteLLM and is registered as a `pre_call` guardrail — LiteLLM compresses each request before forwarding it to the upstream provider.
+
+### Architecture
+
+```
+Client (Open WebUI / OpenCode)
+    │
+    ▼  OpenAI-compatible API
+LiteLLM Proxy (port 4000)
+    │  pre_call guardrail
+    ▼
+Headroom (port 8787) — compresses messages
+    │  returns compressed messages
+    ▼
+LLM Provider (Vertex AI / vLLM / Ollama)
+```
+
+### Add the Headroom service to `podman-compose.yml`
+
+```yaml
+  # ── Headroom (token compression sidecar) ──────────────────────────────
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    restart: always
+    ports:
+      - "8787:8787"
+    environment:
+      HEADROOM_TELEMETRY: "off"
+    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    volumes:
+      - headroom_cache:/app/.headroom
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+Also add `headroom_cache:` to the top-level `volumes:` block.
+
+### Add the guardrail and compressed routing groups to `litellm_config.yaml`
+
+Add the `guardrails` block (before `general_settings`):
+
+```yaml
+guardrails:
+  - guardrail_name: headroom-compression
+    litellm_params:
+      guardrail: headroom
+      mode: pre_call
+      api_base: http://headroom:8787
+      default_on: false  # opt-in; set true to compress every request
+```
+
+Add compressed routing group entries (after the existing `build` / `smart` blocks):
+
+```yaml
+  # ── Routing group: "build-compressed" ─────────────────────────────────────
+  - model_name: build-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: build-compressed
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+
+  # ── Routing group: "smart-compressed" ─────────────────────────────────────
+  - model_name: smart-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+```
+
+Add fallbacks for the compressed groups in `router_settings`:
+
+```yaml
+router_settings:
+  fallbacks:
+    - {"smart": ["gemini-2-5-pro"]}
+    - {"build": ["claude-sonnet-4-6"]}
+    - {"smart-compressed": ["gemini-2-5-pro"]}
+    - {"build-compressed": ["claude-sonnet-4-6"]}
+  context_window_fallbacks:
+    - {"qwen3-14b": ["claude-sonnet-4-6"]}
+    - {"build": ["claude-sonnet-4-6"]}
+    - {"build-compressed": ["claude-sonnet-4-6"]}
+    - {"smart": ["gemini-2-5-pro"]}
+    - {"smart-compressed": ["gemini-2-5-pro"]}
+```
+
+### Verify Headroom is running
+
+```bash
+curl http://localhost:8787/health
+```
+
+### Using compression
+
+**Option A — select a compressed routing group:**
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "build-compressed", "messages": [{"role": "user", "content": "..."}]}'
+```
+
+**Option B — opt in per request (any model):**
+
+```bash
+  -d '{"model": "claude-sonnet-4-6", "guardrails": ["headroom-compression"], "messages": [...]}'
+```
+
+**Option C — issue a virtual key with compression always on:**
+
+```bash
+curl -X POST http://localhost:4000/key/generate \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"key_alias": "my-compressed-key", "guardrails": ["headroom-compression"]}'
+```
+
+**Option D — configure OpenCode to use the compressed build group:**
+
+```json
+{
+  "model": {
+    "modelId": "build-compressed",
+    "provider": {
+      "name": "openai",
+      "apiUrl": "http://localhost:4000/v1",
+      "apiKey": "<your-litellm-key>"
+    }
+  }
+}
+```
+
+### Notes
+
+- Headroom defaults to **not compressing** `user`/`system` messages unless `HEADROOM_COMPRESS_USER_MESSAGES=1` is set on the Headroom container — most coding-agent traffic is in user messages, so set this if you want compression to apply.
+- Compression adds ~100–200 ms latency (local, CPU-bound); subsequent turns on the same session reuse the cache.
+- The CCR (Compressed Content Retrieval) cache is persisted in the `headroom_cache` volume so the LLM can retrieve original content across container restarts.
+- LiteLLM requires **v1.92.x or later** for the Headroom guardrail integration.
+- To verify compression ran on a request, check the `x-litellm-applied-guardrails: headroom-compression` response header or inspect **Logs → Guardrails & Policy Compliance** in the LiteLLM Admin UI.
+
+---
+
+## Step 11: Upgrading an Existing Installation
+
+If you already have the stack deployed and want to add new features (Headroom, new endpoints) or update your configuration, run `setup.py` again from the repo root:
+
+```bash
+cd ~/multimodal-ai-stack
+python setup.py
+```
+
+When the script detects an existing `.env`, it will offer three options:
+
+### Upgrade Modes
+
+**[m] Merge — RECOMMENDED**
+
+Preserves all existing secrets and passwords while updating configuration files from the latest templates. Use this when you want to:
+
+- Enable Headroom token compression on an existing stack
+- Add a new model endpoint (Qwen3, Ollama)
+- Update `podman-compose.yml` or `litellm_config.yaml` to the latest version
+- Change your GCP project or region
+
+What merge keeps:
+
+| Secret | Why it must be preserved |
+|---|---|
+| `LITELLM_SALT_KEY` | Database encryption key — changing it **corrupts the LiteLLM database** |
+| `POSTGRES_PASSWORD` | If changed, the existing `postgres_data` volume becomes inaccessible |
+| `LANGFUSE_SECRET_KEY` | Doubles as the `langfuse-postgres` password — changing locks out all trace history |
+| `LITELLM_MASTER_KEY` | Changing invalidates all existing API clients and virtual keys |
+| `LANGFUSE_PUBLIC_KEY` | Changing breaks the LiteLLM → Langfuse trace callback |
+| `NEXTAUTH_SECRET` | Changing invalidates all Langfuse and Open WebUI sessions |
+| `SALT` | Changing breaks Langfuse password verification |
+| `VALKEY_PASSWORD` | Changing makes the existing cache/rate-limit volume inaccessible |
+
+**[o] Overwrite — ⚠️ DATA LOSS**
+
+Regenerates all secrets from scratch. You will be asked to type `Yes` exactly, twice, before this proceeds. Only use this for a complete fresh start — all existing data in the persistent volumes becomes inaccessible.
+
+**[a] Abort**
+
+Exits immediately without making any changes.
+
+---
+
+### Backups
+
+After confirming the write, the script prompts:
+
+```
+The following files will be overwritten:
+  • .env
+  • podman-compose.yml
+  • config/litellm_config.yaml
+
+Create numbered backups of existing files? [Y/n]:
+```
+
+Backups use incremental `.bak.N` suffixes and preserve directory structure:
+
+```
+~/ai-stack/
+  .env
+  .env.bak.1          ← first backup
+  .env.bak.2          ← second backup
+  podman-compose.yml
+  podman-compose.yml.bak.1
+  config/
+    litellm_config.yaml
+    litellm_config.yaml.bak.1
+```
+
+The names of all backup files created are printed immediately and again in the final summary.
+
+**To restore a backup manually:**
+
+```bash
+cd ~/ai-stack
+cp .env.bak.1 .env
+cp podman-compose.yml.bak.1 podman-compose.yml
+cp config/litellm_config.yaml.bak.1 config/litellm_config.yaml
+```
+
+**To clean up old backups:**
+
+```bash
+cd ~/ai-stack
+rm -f .env.bak.* podman-compose.yml.bak.* config/litellm_config.yaml.bak.*
+```
+
+---
+
+### After Upgrading
+
+```bash
+cd ~/ai-stack
+podman compose pull      # pull any new images (e.g. headroom)
+podman compose up -d     # restart with updated config
+```
+
+If you added Headroom, verify it started:
+
+```bash
+curl http://localhost:8787/health
+podman compose logs headroom
+```
+
+If LiteLLM fails to start (Postgres not yet ready):
+
+```bash
+podman compose restart litellm
+```
+
+---
+
+## Step 12: Updating Images
 
 ```bash
 # Pull latest images and restart
-docker compose pull
-docker compose up -d
+podman compose pull
+podman compose up -d
 ```
 
 ---
@@ -600,5 +879,6 @@ docker compose up -d
 | LiteLLM Admin UI | `http://localhost:4000/ui` | Master key from `.env` |
 | Langfuse UI | `http://localhost:3000` | `admin@local.dev` / `<your-langfuse-admin-password>` |
 | Open WebUI | `http://localhost:8080` | First account becomes admin |
+| Headroom (optional) | `http://localhost:8787` | No auth by default |
 | Valkey | `localhost:6379` | Password from `.env` |
 | PostgreSQL (LiteLLM) | `localhost:5432` | Credentials from `.env` |

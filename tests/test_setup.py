@@ -7,11 +7,16 @@ Tests cover all pure functions (no I/O, no user input):
   - write_env content
   - write_gitignore logic (new file and append)
   - apply_gcp_credentials (symlink and copy)
+  - parse_env
+  - confirm_overwrite_data_loss
+  - prompt_and_create_backups
+  - generate_secrets (merge mode)
 """
 
 import importlib.util
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -360,3 +365,436 @@ class TestWriteLitellmConfig:
     def test_creates_config_subdir(self, setup, tmp):
         setup.write_litellm_config(tmp, None)
         assert (tmp / "config").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# build_litellm_config — Headroom variants
+# ---------------------------------------------------------------------------
+
+
+HEADROOM = {"enabled": True}
+CUSTOM = {"url": "http://host.containers.internal:11434/v1", "key": "unused"}
+
+
+class TestBuildLitellmConfigHeadroom:
+    def test_headroom_adds_build_compressed(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert "build-compressed" in config
+
+    def test_headroom_adds_smart_compressed(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert "smart-compressed" in config
+
+    def test_headroom_adds_guardrails_section(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert "guardrails:" in config
+        assert "headroom-compression" in config
+        assert "guardrail: headroom" in config
+        assert "http://headroom:8787" in config
+
+    def test_headroom_adds_compressed_fallbacks(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert '"build-compressed": ["claude-sonnet-4-6"]' in config
+        assert '"smart-compressed": ["gemini-2-5-pro"]' in config
+
+    def test_headroom_adds_compressed_cwfallbacks(self, setup):
+        yaml = pytest.importorskip("yaml")
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert '"build-compressed": ["claude-sonnet-4-6"]' in config
+        assert '"smart-compressed": ["gemini-2-5-pro"]' in config
+        parsed = yaml.safe_load(config)
+        cwf = parsed["router_settings"]["context_window_fallbacks"]
+        keys = [list(entry.keys())[0] for entry in cwf]
+        assert "build-compressed" in keys
+        assert "smart-compressed" in keys
+
+    def test_headroom_with_custom_smart_compressed_has_local_entry(self, setup):
+        config = setup.build_litellm_config(CUSTOM, headroom=HEADROOM)
+        # smart-compressed should include the custom endpoint entry
+        lines = config.splitlines()
+        in_smart_compressed = False
+        found_custom = False
+        for line in lines:
+            if "model_name: smart-compressed" in line:
+                in_smart_compressed = True
+            if in_smart_compressed and "CUSTOM_ENDPOINT_URL" in line:
+                found_custom = True
+                break
+        assert found_custom, "smart-compressed should reference CUSTOM_ENDPOINT_URL"
+
+    def test_headroom_without_custom_smart_compressed_no_local_entry(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        # smart-compressed should NOT include a custom endpoint block
+        # (but CUSTOM_ENDPOINT_URL may appear in standalone llama-local — it's absent too)
+        assert "CUSTOM_ENDPOINT_URL" not in config
+
+    def test_no_headroom_no_compressed_groups(self, setup):
+        config = setup.build_litellm_config(None, headroom=None)
+        assert "build-compressed" not in config
+        assert "smart-compressed" not in config
+        assert "guardrails:" not in config
+
+    def test_headroom_config_is_valid_yaml(self, setup):
+        yaml = pytest.importorskip("yaml")
+        for custom in [CUSTOM, None]:
+            config = setup.build_litellm_config(custom, headroom=HEADROOM)
+            parsed = yaml.safe_load(config)
+            assert isinstance(parsed, dict)
+            assert "model_list" in parsed
+            assert "guardrails" in parsed
+            assert "router_settings" in parsed
+
+    def test_headroom_default_on_is_false(self, setup):
+        config = setup.build_litellm_config(None, headroom=HEADROOM)
+        assert "default_on: false" in config
+
+
+# ---------------------------------------------------------------------------
+# write_litellm_config — Headroom variants
+# ---------------------------------------------------------------------------
+
+
+class TestWriteLitellmConfigHeadroom:
+    def test_writes_file_with_headroom(self, setup, tmp):
+        setup.write_litellm_config(tmp, None, headroom=HEADROOM)
+        dest = tmp / "config" / "litellm_config.yaml"
+        assert dest.exists()
+        content = dest.read_text()
+        assert "build-compressed" in content
+        assert "headroom-compression" in content
+
+    def test_writes_file_without_headroom(self, setup, tmp):
+        setup.write_litellm_config(tmp, None, headroom=None)
+        dest = tmp / "config" / "litellm_config.yaml"
+        assert dest.exists()
+        assert "headroom-compression" not in dest.read_text()
+
+    def test_writes_file_with_custom_and_headroom(self, setup, tmp):
+        setup.write_litellm_config(tmp, CUSTOM, headroom=HEADROOM)
+        dest = tmp / "config" / "litellm_config.yaml"
+        assert dest.exists()
+        content = dest.read_text()
+        assert "llama-local" in content
+        assert "smart-compressed" in content
+        assert "headroom-compression" in content
+
+
+# ---------------------------------------------------------------------------
+# parse_env
+# ---------------------------------------------------------------------------
+
+
+class TestParseEnv:
+    def test_parses_simple_key_value_pairs(self, setup, tmp):
+        (tmp / ".env").write_text("KEY1=value1\nKEY2=value2\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"KEY1": "value1", "KEY2": "value2"}
+
+    def test_ignores_comment_lines(self, setup, tmp):
+        (tmp / ".env").write_text("# this is a comment\nKEY=value\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"KEY": "value"}
+        assert "# this is a comment" not in result
+
+    def test_ignores_blank_lines(self, setup, tmp):
+        (tmp / ".env").write_text("\nKEY=value\n\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"KEY": "value"}
+
+    def test_handles_equals_in_value(self, setup, tmp):
+        # Values such as DATABASE_URL that contain '=' must be preserved in full
+        (tmp / ".env").write_text("DB=postgresql://user:pass@host/db?sslmode=disable\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"DB": "postgresql://user:pass@host/db?sslmode=disable"}
+
+    def test_strips_whitespace_around_key_and_value(self, setup, tmp):
+        (tmp / ".env").write_text("  KEY  =  value  \n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"KEY": "value"}
+
+    def test_empty_value_is_preserved(self, setup, tmp):
+        (tmp / ".env").write_text("KEY=\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result == {"KEY": ""}
+
+    def test_inline_comment_not_stripped(self, setup, tmp):
+        # Only full-line comments are ignored; inline comments are part of the value
+        (tmp / ".env").write_text("KEY=value # not a comment\n")
+        result = setup.parse_env(tmp / ".env")
+        assert result["KEY"] == "value # not a comment"
+
+    def test_roundtrip_with_write_env(self, setup, tmp):
+        """parse_env must be able to read back everything write_env writes."""
+        setup.write_env(tmp, "my-project", "us-east1", SAMPLE_SECRETS, None)
+        parsed = setup.parse_env(tmp / ".env")
+        for key, val in SAMPLE_SECRETS.items():
+            assert parsed[key] == val, f"Mismatch for {key}"
+        assert parsed["GOOGLE_CLOUD_PROJECT"] == "my-project"
+        assert parsed["VERTEX_LOCATION"] == "us-east1"
+
+
+# ---------------------------------------------------------------------------
+# confirm_overwrite_data_loss
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmOverwriteDataLoss:
+    def _run(self, setup, responses):
+        """Patch prompt_explicit_yes to return successive values from responses."""
+        calls = iter(responses)
+        with patch.object(setup, "prompt_explicit_yes", side_effect=lambda _: next(calls)):
+            return setup.confirm_overwrite_data_loss()
+
+    def test_returns_true_on_double_yes(self, setup):
+        assert self._run(setup, [True, True]) is True
+
+    def test_returns_false_if_first_prompt_declined(self, setup):
+        assert self._run(setup, [False]) is False
+
+    def test_returns_false_if_second_prompt_declined(self, setup):
+        assert self._run(setup, [True, False]) is False
+
+    def test_first_no_does_not_call_second_prompt(self, setup):
+        """If the first confirmation fails, the second must never be shown."""
+        call_count = 0
+
+        def side_effect(_):
+            nonlocal call_count
+            call_count += 1
+            return False  # Always decline
+
+        with patch.object(setup, "prompt_explicit_yes", side_effect=side_effect):
+            setup.confirm_overwrite_data_loss()
+
+        assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# prompt_explicit_yes
+# ---------------------------------------------------------------------------
+
+
+class TestPromptExplicitYes:
+    def test_returns_true_for_exact_Yes(self, setup):
+        with patch("builtins.input", return_value="Yes"):
+            assert setup.prompt_explicit_yes("Confirm?") is True
+
+    def test_returns_false_for_lowercase_yes(self, setup):
+        with patch("builtins.input", return_value="yes"):
+            assert setup.prompt_explicit_yes("Confirm?") is False
+
+    def test_returns_false_for_y(self, setup):
+        with patch("builtins.input", return_value="y"):
+            assert setup.prompt_explicit_yes("Confirm?") is False
+
+    def test_returns_false_for_YES_uppercase(self, setup):
+        with patch("builtins.input", return_value="YES"):
+            assert setup.prompt_explicit_yes("Confirm?") is False
+
+    def test_returns_false_for_empty_input(self, setup):
+        with patch("builtins.input", return_value=""):
+            assert setup.prompt_explicit_yes("Confirm?") is False
+
+    def test_returns_false_for_arbitrary_string(self, setup):
+        with patch("builtins.input", return_value="I UNDERSTAND DATA WILL BE LOST"):
+            assert setup.prompt_explicit_yes("Confirm?") is False
+
+
+# ---------------------------------------------------------------------------
+# prompt_and_create_backups
+# ---------------------------------------------------------------------------
+
+
+class TestPromptAndCreateBackups:
+    def _with_yes(self, setup, out_dir):
+        """Run prompt_and_create_backups with the backup prompt answered Yes."""
+        with patch.object(setup, "prompt_yes_no", return_value=True):
+            return setup.prompt_and_create_backups(out_dir)
+
+    def _with_no(self, setup, out_dir):
+        """Run prompt_and_create_backups with the backup prompt answered No."""
+        with patch.object(setup, "prompt_yes_no", return_value=False):
+            return setup.prompt_and_create_backups(out_dir)
+
+    def test_returns_empty_list_when_no_files_exist(self, setup, tmp):
+        result = self._with_yes(setup, tmp)
+        assert result == []
+
+    def test_returns_empty_list_when_user_declines(self, setup, tmp):
+        (tmp / ".env").write_text("KEY=value")
+        result = self._with_no(setup, tmp)
+        assert result == []
+
+    def test_creates_bak_1_for_env(self, setup, tmp):
+        (tmp / ".env").write_text("KEY=value")
+        self._with_yes(setup, tmp)
+        assert (tmp / ".env.bak.1").exists()
+        assert (tmp / ".env.bak.1").read_text() == "KEY=value"
+
+    def test_increments_to_bak_2_when_bak_1_exists(self, setup, tmp):
+        (tmp / ".env").write_text("current")
+        (tmp / ".env.bak.1").write_text("old")
+        self._with_yes(setup, tmp)
+        assert (tmp / ".env.bak.2").exists()
+        assert (tmp / ".env.bak.2").read_text() == "current"
+
+    def test_increments_across_multiple_existing_backups(self, setup, tmp):
+        (tmp / ".env").write_text("newest")
+        for i in range(1, 4):
+            (tmp / f".env.bak.{i}").write_text(f"backup {i}")
+        self._with_yes(setup, tmp)
+        assert (tmp / ".env.bak.4").exists()
+
+    def test_original_file_unchanged_after_backup(self, setup, tmp):
+        (tmp / ".env").write_text("original content")
+        self._with_yes(setup, tmp)
+        assert (tmp / ".env").read_text() == "original content"
+
+    def test_preserves_directory_structure_for_config(self, setup, tmp):
+        (tmp / "config").mkdir()
+        (tmp / "config" / "litellm_config.yaml").write_text("yaml: true")
+        self._with_yes(setup, tmp)
+        assert (tmp / "config" / "litellm_config.yaml.bak.1").exists()
+
+    def test_backs_up_all_three_files(self, setup, tmp):
+        (tmp / ".env").write_text("env")
+        (tmp / "podman-compose.yml").write_text("compose")
+        (tmp / "config").mkdir()
+        (tmp / "config" / "litellm_config.yaml").write_text("config")
+        result = self._with_yes(setup, tmp)
+        assert len(result) == 3
+
+    def test_returns_relative_paths(self, setup, tmp):
+        (tmp / ".env").write_text("env")
+        result = self._with_yes(setup, tmp)
+        assert all(not Path(r).is_absolute() for r in result)
+        assert ".env.bak.1" in result
+
+    def test_backs_up_only_existing_files(self, setup, tmp):
+        # Only .env exists — compose and config are missing
+        (tmp / ".env").write_text("env")
+        result = self._with_yes(setup, tmp)
+        assert len(result) == 1
+        assert ".env.bak.1" in result
+
+
+# ---------------------------------------------------------------------------
+# generate_secrets — merge mode
+# ---------------------------------------------------------------------------
+
+_ALL_EXISTING = {
+    "LITELLM_MASTER_KEY": "sk-existing-master",
+    "LITELLM_SALT_KEY": "existing-salt-key-32chars!!!!!!!",
+    "POSTGRES_USER": "litellm",
+    "POSTGRES_PASSWORD": "existing-pg-pass",
+    "POSTGRES_DB": "litellm",
+    "VALKEY_PASSWORD": "existing-valkey-pass",
+    "LANGFUSE_SECRET_KEY": "existing-lf-secret",
+    "LANGFUSE_PUBLIC_KEY": "lf-pk-existingpubkey",
+    "NEXTAUTH_SECRET": "existing-nextauth",
+    "SALT": "existing-salt-32hexchars!!!!!!!",
+    "LANGFUSE_INIT_USER_PASSWORD": "existing-lf-admin-pass",
+    "CUSTOM_ENDPOINT_URL": "",
+    "CUSTOM_ENDPOINT_KEY": "",
+    "QWEN3_API_BASE": "",
+    "QWEN3_API_KEY": "",
+}
+
+
+class TestGenerateSecretsMergeMode:
+    def test_preserves_salt_key(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["LITELLM_SALT_KEY"] == _ALL_EXISTING["LITELLM_SALT_KEY"]
+
+    def test_preserves_master_key(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["LITELLM_MASTER_KEY"] == _ALL_EXISTING["LITELLM_MASTER_KEY"]
+
+    def test_preserves_postgres_password(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["POSTGRES_PASSWORD"] == _ALL_EXISTING["POSTGRES_PASSWORD"]
+
+    def test_preserves_valkey_password(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["VALKEY_PASSWORD"] == _ALL_EXISTING["VALKEY_PASSWORD"]
+
+    def test_preserves_langfuse_secret_key(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["LANGFUSE_SECRET_KEY"] == _ALL_EXISTING["LANGFUSE_SECRET_KEY"]
+
+    def test_preserves_langfuse_public_key(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["LANGFUSE_PUBLIC_KEY"] == _ALL_EXISTING["LANGFUSE_PUBLIC_KEY"]
+
+    def test_preserves_nextauth_secret(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["NEXTAUTH_SECRET"] == _ALL_EXISTING["NEXTAUTH_SECRET"]
+
+    def test_preserves_salt(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["SALT"] == _ALL_EXISTING["SALT"]
+
+    def test_preserves_langfuse_init_password(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        assert result["LANGFUSE_INIT_USER_PASSWORD"] == _ALL_EXISTING["LANGFUSE_INIT_USER_PASSWORD"]
+
+    def test_generates_missing_secret_when_absent(self, setup):
+        # Existing file has no VALKEY_PASSWORD — merge must generate one
+        partial = {k: v for k, v in _ALL_EXISTING.items() if k != "VALKEY_PASSWORD"}
+        result = setup.generate_secrets(None, None, partial)
+        assert "VALKEY_PASSWORD" in result
+        assert result["VALKEY_PASSWORD"] != ""
+
+    def test_endpoint_values_come_from_prompt_args(self, setup):
+        # Even in merge mode, if the user provided a new endpoint via prompt
+        # steps, its values should appear in the output.
+        qwen = {"url": "https://new-qwen.example.com/v1", "key": "new-key"}
+        result = setup.generate_secrets(None, qwen, _ALL_EXISTING)
+        assert result["QWEN3_API_BASE"] == "https://new-qwen.example.com/v1"
+        assert result["QWEN3_API_KEY"] == "new-key"
+
+    def test_fresh_install_generates_all_secrets(self, setup):
+        # Fresh-install mode prompts for master key / Langfuse password override;
+        # patch input() to press Enter (accept generated values) for both prompts.
+        with patch("builtins.input", return_value=""):
+            result = setup.generate_secrets(None, None, None)
+        for key in [
+            "LITELLM_MASTER_KEY",
+            "LITELLM_SALT_KEY",
+            "POSTGRES_PASSWORD",
+            "VALKEY_PASSWORD",
+            "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_PUBLIC_KEY",
+            "NEXTAUTH_SECRET",
+            "SALT",
+            "LANGFUSE_INIT_USER_PASSWORD",
+        ]:
+            assert key in result
+            assert result[key] != ""
+
+    def test_fresh_install_master_key_has_sk_prefix(self, setup):
+        with patch("builtins.input", return_value=""):
+            result = setup.generate_secrets(None, None, None)
+        assert result["LITELLM_MASTER_KEY"].startswith("sk-")
+
+    def test_merge_result_contains_all_required_keys(self, setup):
+        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        required = [
+            "LITELLM_MASTER_KEY",
+            "LITELLM_SALT_KEY",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "VALKEY_PASSWORD",
+            "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_PUBLIC_KEY",
+            "NEXTAUTH_SECRET",
+            "SALT",
+            "LANGFUSE_INIT_USER_PASSWORD",
+            "CUSTOM_ENDPOINT_URL",
+            "CUSTOM_ENDPOINT_KEY",
+            "QWEN3_API_BASE",
+            "QWEN3_API_KEY",
+        ]
+        for key in required:
+            assert key in result, f"Missing key: {key}"
