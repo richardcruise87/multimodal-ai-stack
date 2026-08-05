@@ -11,6 +11,11 @@ Creates a stack directory (default: ~/ai-stack/) containing:
     config/litellm_config.yaml  — LiteLLM proxy configuration
     secrets/                    — GCP credentials (symlink or copy)
     .gitignore                  — ensures secrets are never committed
+
+When an existing .env is detected the script offers three modes:
+    Merge    — preserve existing secrets, add/update configuration (default)
+    Overwrite — regenerate all secrets (requires double confirmation; data loss)
+    Abort    — exit without making any changes
 """
 
 import secrets
@@ -18,6 +23,7 @@ import shutil
 import sys
 import textwrap
 from pathlib import Path
+from typing import Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,6 +119,20 @@ def prompt_yes_no(message, default=True):
     return value.startswith("y")
 
 
+def prompt_explicit_yes(message):
+    """
+    Prompt requiring the user to type exactly 'Yes' (case-sensitive) to confirm.
+    Any other input is treated as No.  Returns bool.
+    """
+    try:
+        value = input(f"  {message} {cyan('[Yes/no]')}: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print(red("\nAborted."))
+        sys.exit(1)
+    return value == "Yes"
+
+
 def gen_password():
     """Generate a random URL-safe password (32 chars)."""
     return secrets.token_urlsafe(24)
@@ -173,7 +193,7 @@ def print_banner():
 
 
 def get_output_dir():
-    section("Step 1 of 8 — Output directory")
+    section("Step 1 of 9 — Output directory")
     default = str(Path.home() / "ai-stack")
     raw = prompt("Stack directory", default=default)
     out = Path(raw).expanduser().resolve()
@@ -186,28 +206,161 @@ def get_output_dir():
 # ---------------------------------------------------------------------------
 
 
-def check_existing_env(out_dir):
+def parse_env(env_path: Path) -> Dict[str, str]:
+    """
+    Parse an existing .env file into a dict.
+
+    Rules:
+      - Lines starting with '#' are comments and are ignored.
+      - Blank lines are ignored.
+      - Each remaining line must contain '='; the key is everything before
+        the first '=' (stripped), the value is everything after (stripped).
+        This correctly handles values that themselves contain '=' such as
+        DATABASE_URL=postgresql://user:pass@host/db.
+
+    Returns: {"KEY": "value", ...}
+    """
+    result: Dict[str, str] = {}
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
+    return result
+
+
+def confirm_overwrite_data_loss() -> bool:
+    """
+    Double-confirmation gate for the destructive overwrite path.
+
+    The user must type exactly 'Yes' (case-sensitive) at both prompts.
+    Any other response at either prompt returns False immediately.
+    """
+    print()
+    print(red("  ⚠️  WARNING: Overwriting will PERMANENTLY LOSE ACCESS to:"))
+    print()
+    print(red("    • LiteLLM virtual keys and spend history  (postgres_data volume)"))
+    print(red("    • Langfuse traces and observability logs  (langfuse_postgres_data volume)"))
+    print(red("    • Open WebUI chat history                 (open_webui_data volume)"))
+    print()
+    print(yellow("  If you have existing data, choose Merge mode instead."))
+    print()
+
+    if not prompt_explicit_yes(
+        "Proceed with overwrite? Type 'Yes' to confirm, anything else cancels"
+    ):
+        return False
+
+    print()
+    print(red("  ⚠️  SECOND CONFIRMATION: This action cannot be undone."))
+    return prompt_explicit_yes("Are you absolutely sure? Type 'Yes' to confirm")
+
+
+def check_existing_env(out_dir: Path) -> Optional[Dict[str, str]]:
+    """
+    Check whether an existing .env is present in out_dir.
+
+    Returns:
+      None            — fresh install (no existing .env, or user chose Overwrite)
+      dict            — merge mode (parsed contents of the existing .env)
+
+    The function may call sys.exit(0) if the user chooses Abort or cancels
+    the overwrite confirmation.
+    """
     env_path = out_dir / ".env"
     if not env_path.exists():
-        return True  # nothing to worry about
+        return None  # Fresh install — nothing to worry about
 
-    section("Step 2 of 8 — Existing .env detected")
+    section("Step 2 of 9 — Existing .env detected")
     print(yellow(f"  Found existing .env at: {env_path}"))
     print()
+
     choice = prompt_choice(
         "What would you like to do?",
         [
-            ("o", "Overwrite — generate a fresh .env (existing secrets will be lost)"),
-            ("k", "Keep — abort setup and leave the existing .env untouched"),
+            ("m", "Merge  — preserve existing secrets, add new config (RECOMMENDED)"),
+            ("o", "Overwrite — generate fresh secrets (⚠️  DATA LOSS)"),
+            ("a", "Abort  — exit setup without making any changes"),
         ],
     )
-    if choice == "k":
+
+    if choice == "a":
         print()
-        print(yellow("  Keeping existing .env. Aborting setup."))
+        print(yellow("  Setup aborted. No changes made."))
         sys.exit(0)
+
+    if choice == "o":
+        if not confirm_overwrite_data_loss():
+            print()
+            print(yellow("  Overwrite cancelled. Setup aborted."))
+            sys.exit(0)
+        print()
+        print(yellow("  Proceeding with overwrite. All secrets will be regenerated."))
+        return None  # Treat as fresh install
+
+    # Merge mode
     print()
-    print(yellow("  Will overwrite existing .env."))
-    return True
+    print(green("  Merge mode: existing secrets will be preserved."))
+    return parse_env(env_path)
+
+
+# ---------------------------------------------------------------------------
+# Step 2b — Backup
+# ---------------------------------------------------------------------------
+
+
+def prompt_and_create_backups(out_dir: Path) -> List[str]:
+    """
+    Prompt the user whether they want numbered backups of files that are
+    about to be overwritten.  Creates .bak.N siblings (preserving directory
+    structure) for each file that exists.
+
+    Returns a list of relative path strings for every backup file created,
+    or an empty list if the user declined or no files existed.
+    """
+    candidates = [
+        ".env",
+        "podman-compose.yml",
+        "config/litellm_config.yaml",
+    ]
+
+    existing = [f for f in candidates if (out_dir / f).exists()]
+    if not existing:
+        return []
+
+    print()
+    print(yellow("  The following files will be overwritten:"))
+    for f in existing:
+        print(f"    • {f}")
+    print()
+
+    if not prompt_yes_no("Create numbered backups of existing files?", default=True):
+        print(yellow("  Skipping backups."))
+        return []
+
+    backed_up: List[str] = []
+    for rel in existing:
+        src = out_dir / rel
+
+        # Find the next unused .bak.N number
+        n = 1
+        while (out_dir / f"{rel}.bak.{n}").exists():
+            n += 1
+        dest = out_dir / f"{rel}.bak.{n}"
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        backed_up.append(str(dest.relative_to(out_dir)))
+
+    if backed_up:
+        print()
+        print(green(f"  {green('✓')} Created {len(backed_up)} backup(s):"))
+        for f in backed_up:
+            print(green(f"      • {f}"))
+
+    return backed_up
 
 
 # ---------------------------------------------------------------------------
@@ -215,10 +368,68 @@ def check_existing_env(out_dir):
 # ---------------------------------------------------------------------------
 
 
-def setup_gcp_credentials(out_dir):
-    section("Step 3 of 8 — GCP credentials")
+def _prompt_gcp_credentials_file(dest: Path) -> dict:
+    """Inner loop: ask the user for a credentials file path and validate it."""
+    while True:
+        src_raw = prompt("Path to your service account JSON file")
+        if not src_raw:
+            print(red("  Path cannot be empty. Try again, or press Ctrl-C to abort."))
+            continue
+        src = Path(src_raw).expanduser().resolve()
+        if not src.exists():
+            print(red(f"  File not found: {src}"))
+            continue
+        if not src.is_file():
+            print(red(f"  Not a file: {src}"))
+            continue
+        # Minimal JSON sanity check
+        try:
+            import json
+
+            with src.open() as f:
+                data = json.load(f)
+            if "type" not in data:
+                print(
+                    yellow(
+                        "  Warning: file does not look like a GCP service account key"
+                        " (missing 'type' field)."
+                    )
+                )
+                if not prompt_yes_no("  Continue anyway?", default=False):
+                    continue
+        except Exception as e:
+            print(yellow(f"  Warning: could not parse file as JSON: {e}"))
+            if not prompt_yes_no("  Continue anyway?", default=False):
+                continue
+        return src
+
+
+def setup_gcp_credentials(out_dir: Path, existing_secrets: Optional[Dict] = None):
+    """
+    Step 3: configure the GCP service-account credentials file.
+
+    In merge mode, if a credentials file already exists at the expected path
+    the user is offered the option to keep it (default) or reconfigure.
+    Choosing 'skip' at any point returns None, which signals apply_gcp_credentials
+    to leave existing credentials untouched.
+    """
+    section("Step 3 of 9 — GCP credentials")
     secrets_dir = out_dir / "secrets"
     dest = secrets_dir / "gcp-credentials.json"
+
+    # In merge mode, if credentials are already in place offer to skip
+    if existing_secrets is not None and dest.exists():
+        print(green(f"  ✓ Existing credentials found: {dest}"))
+        if dest.is_symlink():
+            try:
+                print(f"    (symlink → {dest.resolve()})")
+            except OSError:
+                print("    (symlink — target may be missing)")
+        print()
+        if not prompt_yes_no("Reconfigure GCP credentials?", default=False):
+            print(yellow("  Keeping existing credentials."))
+            return None  # Leave them untouched
+        print()
 
     print(
         textwrap.dedent("""\
@@ -246,41 +457,9 @@ def setup_gcp_credentials(out_dir):
         print(yellow("  Skipping GCP credentials. Remember to add:"))
         print(yellow(f"    {dest}"))
         print(yellow("  before starting the stack."))
-        return False
+        return None  # Same as declining reconfigure — leave existing untouched
 
-    while True:
-        src_raw = prompt("Path to your service account JSON file")
-        if not src_raw:
-            print(red("  Path cannot be empty. Try again, or press Ctrl-C to abort."))
-            continue
-        src = Path(src_raw).expanduser().resolve()
-        if not src.exists():
-            print(red(f"  File not found: {src}"))
-            continue
-        if not src.is_file():
-            print(red(f"  Not a file: {src}"))
-            continue
-        # Minimal JSON sanity check
-        try:
-            import json
-
-            with src.open() as f:
-                data = json.load(f)
-            if "type" not in data:
-                print(
-                    yellow(
-                        "  Warning: file does not look like a GCP service account key (missing 'type' field)."
-                    )
-                )
-                if not prompt_yes_no("  Continue anyway?", default=False):
-                    continue
-        except Exception as e:
-            print(yellow(f"  Warning: could not parse file as JSON: {e}"))
-            if not prompt_yes_no("  Continue anyway?", default=False):
-                continue
-        break
-
-    # We'll write the file during the write phase; store the action for later
+    src = _prompt_gcp_credentials_file(dest)
     return {"action": choice, "src": src, "dest": dest}
 
 
@@ -289,8 +468,25 @@ def setup_gcp_credentials(out_dir):
 # ---------------------------------------------------------------------------
 
 
-def get_gcp_config():
-    section("Step 4 of 8 — GCP / Vertex AI project")
+def get_gcp_config(existing_secrets: Optional[Dict] = None):
+    """
+    Step 4: GCP project ID and Vertex AI location.
+
+    In merge mode the current values are shown and kept by default.
+    """
+    section("Step 4 of 9 — GCP / Vertex AI project")
+
+    if existing_secrets:
+        current_project = existing_secrets.get("GOOGLE_CLOUD_PROJECT", "")
+        current_location = existing_secrets.get("VERTEX_LOCATION", "us-central1")
+        if current_project:
+            print(f"  Current project:  {cyan(current_project)}")
+            print(f"  Current location: {cyan(current_location)}")
+            print()
+            if prompt_yes_no("Keep existing GCP configuration?", default=True):
+                return current_project, current_location
+            print()
+
     project = prompt("GOOGLE_CLOUD_PROJECT (your GCP project ID)")
     while not project:
         print(red("  Project ID cannot be empty."))
@@ -305,8 +501,26 @@ def get_gcp_config():
 # ---------------------------------------------------------------------------
 
 
-def get_qwen3_endpoint():
-    section("Step 5 of 8 — Qwen3-14B endpoint")
+def get_qwen3_endpoint(existing_secrets: Optional[Dict] = None):
+    """
+    Step 5: optional external Qwen3-14B vLLM endpoint.
+
+    In merge mode, an existing URL is shown and kept by default.
+    """
+    section("Step 5 of 9 — Qwen3-14B endpoint")
+
+    if existing_secrets:
+        existing_url = existing_secrets.get("QWEN3_API_BASE", "")
+        if existing_url:
+            print(f"  Currently configured: {cyan(existing_url)}")
+            print()
+            if prompt_yes_no("Keep existing Qwen3 endpoint?", default=True):
+                return {
+                    "url": existing_url,
+                    "key": existing_secrets.get("QWEN3_API_KEY", ""),
+                }
+            print()
+
     print(
         textwrap.dedent("""\
       LiteLLM can route requests to an external Qwen3-14B model served via a
@@ -334,8 +548,26 @@ def get_qwen3_endpoint():
 # ---------------------------------------------------------------------------
 
 
-def get_custom_endpoint():
-    section("Step 6 of 8 — Local model endpoint (Ollama / custom)")
+def get_custom_endpoint(existing_secrets: Optional[Dict] = None):
+    """
+    Step 6: optional local model server (Ollama / OpenAI-compatible).
+
+    In merge mode, an existing URL is shown and kept by default.
+    """
+    section("Step 6 of 9 — Local model endpoint (Ollama / custom)")
+
+    if existing_secrets:
+        existing_url = existing_secrets.get("CUSTOM_ENDPOINT_URL", "")
+        if existing_url:
+            print(f"  Currently configured: {cyan(existing_url)}")
+            print()
+            if prompt_yes_no("Keep existing custom endpoint?", default=True):
+                return {
+                    "url": existing_url,
+                    "key": existing_secrets.get("CUSTOM_ENDPOINT_KEY", ""),
+                }
+            print()
+
     print(
         textwrap.dedent("""\
       If you have a local model server (e.g. Ollama), LiteLLM can route
@@ -357,74 +589,165 @@ def get_custom_endpoint():
 
 
 # ---------------------------------------------------------------------------
-# Step 7 — Secret generation
+# Step 7 — Headroom token compression
 # ---------------------------------------------------------------------------
 
 
-def generate_secrets(custom_endpoint, qwen3_endpoint):
-    section("Step 7 of 8 — Secrets")
-    print(
-        textwrap.dedent("""\
-      Generating random values for all secrets.
-      For LITELLM_MASTER_KEY and the Langfuse admin password you can press
-      Enter to accept the generated value or type your own.
+def get_headroom_config(existing_secrets: Optional[Dict] = None):
+    """
+    Step 7: optional Headroom token compression sidecar.
 
-      Save the values shown at the end of this script — they will not be
-      displayed again.
-    """)
-    )
+    Always prompts (no .env marker stored) — compose is the runtime source of
+    truth.  In merge mode a shorter description is shown since the user is
+    already familiar with the stack.
+    """
+    section("Step 7 of 9 — Headroom token compression (optional)")
 
-    # Auto-generated, no user override
-    salt_key = gen_hex(32)
-    postgres_password = gen_password()
-    valkey_password = gen_password()
-    langfuse_secret_key = gen_password()
-    langfuse_public_key = gen_langfuse_public_key()
-    nextauth_secret = gen_password()
-    langfuse_salt = gen_hex(32)
+    if existing_secrets is not None:
+        print("  Headroom is optional token compression (15–95% savings).")
+        print("  The compose file will include Headroom if you enable it here.")
+        print()
+    else:
+        print(
+            textwrap.dedent("""\
+          Headroom is a local token compression service that can reduce input token
+          costs by 15-95% depending on content type (code, JSON, logs, etc.).
 
-    # User may override master key
-    generated_master = gen_master_key()
-    print(f"  Generated LITELLM_MASTER_KEY: {cyan(generated_master)}")
-    master_key = prompt(
-        "  LITELLM_MASTER_KEY (Enter to accept)", default=generated_master, secret=False
-    )
-    # Ensure it starts with sk-
-    if not master_key.startswith("sk-"):
-        master_key = "sk-" + master_key
-        print(f"  Prefixed with 'sk-': {cyan(master_key)}")
+          It runs as a sidecar container alongside LiteLLM. When enabled, two extra
+          routing groups are added — "build-compressed" and "smart-compressed" — that
+          apply Headroom compression before sending requests to the LLM.
 
-    # User may override Langfuse admin password
-    generated_lf_pass = gen_password()
-    print()
-    print(f"  Generated Langfuse admin password: {cyan(generated_lf_pass)}")
-    langfuse_init_password = prompt(
-        "  Langfuse admin password (Enter to accept)", default=generated_lf_pass, secret=False
-    )
-    if not langfuse_init_password:
-        langfuse_init_password = generated_lf_pass
+          Existing groups ("build", "smart") are unchanged; compression is opt-in
+          by selecting the -compressed variant.
+
+          Port 8787 will be exposed on the host.
+        """)
+        )
+
+    use_headroom = prompt_yes_no("Enable Headroom token compression?", default=False)
+    if not use_headroom:
+        return None
+
+    return {"enabled": True}
+
+
+# ---------------------------------------------------------------------------
+# Step 8 — Secret generation / merge
+# ---------------------------------------------------------------------------
+
+
+def generate_secrets(
+    custom_endpoint,
+    qwen3_endpoint,
+    existing_secrets: Optional[Dict] = None,
+) -> Dict[str, str]:
+    """
+    Generate (fresh install) or merge (upgrade) all .env secrets.
+
+    In merge mode every secret that already exists in existing_secrets is
+    reused verbatim.  Only keys that are absent from the existing file are
+    newly generated.  A per-key log line is printed showing ✓ Preserved or
+    + Generated so the user can see exactly what changed.
+
+    The LITELLM_MASTER_KEY interactive override prompt is suppressed in merge
+    mode (the existing key is always preserved).  The Langfuse admin password
+    override is likewise suppressed — it was already set at first install.
+
+    Endpoint URLs/keys follow the values returned by get_qwen3_endpoint() and
+    get_custom_endpoint(), which in merge mode already contain the preserved or
+    updated values chosen by the user.
+    """
+    section("Step 8 of 9 — Secrets")
+    merge = existing_secrets is not None
+
+    if merge:
+        print(green("  Merge mode: existing secrets will be preserved."))
+        print(green("  Only missing secrets will be generated."))
+        print()
+    else:
+        print(
+            textwrap.dedent("""\
+          Generating random values for all secrets.
+          For LITELLM_MASTER_KEY and the Langfuse admin password you can press
+          Enter to accept the generated value or type your own.
+
+          Save the values shown at the end of this script — they will not be
+          displayed again.
+        """)
+        )
+
+    def _get(key: str, generator, *, silent: bool = False) -> str:
+        """Return existing value (merge) or call generator (fresh)."""
+        if merge and key in existing_secrets:
+            if not silent:
+                print(f"  {green('✓')} Preserved: {key}")
+            return existing_secrets[key]
+        value = generator()
+        if merge:
+            print(f"  {cyan('+')} Generated: {key}")
+        return value
+
+    # --- Critical secrets — always preserved in merge mode, never prompted ---
+    salt_key = _get("LITELLM_SALT_KEY", lambda: gen_hex(32))
+    master_key = _get("LITELLM_MASTER_KEY", gen_master_key)
+    postgres_user = _get("POSTGRES_USER", lambda: "litellm", silent=True)
+    postgres_password = _get("POSTGRES_PASSWORD", gen_password)
+    postgres_db = _get("POSTGRES_DB", lambda: "litellm", silent=True)
+    valkey_password = _get("VALKEY_PASSWORD", gen_password)
+    langfuse_secret_key = _get("LANGFUSE_SECRET_KEY", gen_password)
+    langfuse_public_key = _get("LANGFUSE_PUBLIC_KEY", gen_langfuse_public_key)
+    nextauth_secret = _get("NEXTAUTH_SECRET", gen_password)
+    langfuse_salt = _get("SALT", lambda: gen_hex(32))
+    langfuse_init_password = _get("LANGFUSE_INIT_USER_PASSWORD", gen_password)
+
+    # --- Fresh-install interactive overrides (skipped in merge mode) ---
+    if not merge:
+        print(f"\n  Generated LITELLM_MASTER_KEY: {cyan(master_key)}")
+        overridden = prompt(
+            "  LITELLM_MASTER_KEY (Enter to accept)", default=master_key, secret=False
+        )
+        if overridden:
+            master_key = overridden
+        if not master_key.startswith("sk-"):
+            master_key = "sk-" + master_key
+            print(f"  Prefixed with 'sk-': {cyan(master_key)}")
+
+        generated_lf_pass = langfuse_init_password
+        print()
+        print(f"  Generated Langfuse admin password: {cyan(generated_lf_pass)}")
+        overridden_lf = prompt(
+            "  Langfuse admin password (Enter to accept)", default=generated_lf_pass, secret=False
+        )
+        if overridden_lf:
+            langfuse_init_password = overridden_lf
+
+    # --- Endpoint config: use values from prompt steps (already merged there) ---
+    custom_url = custom_endpoint["url"] if custom_endpoint else ""
+    custom_key = custom_endpoint["key"] if custom_endpoint else ""
+    qwen3_url = qwen3_endpoint["url"] if qwen3_endpoint else ""
+    qwen3_key = qwen3_endpoint["key"] if qwen3_endpoint else ""
 
     return {
         "LITELLM_MASTER_KEY": master_key,
         "LITELLM_SALT_KEY": salt_key,
-        "POSTGRES_USER": "litellm",
+        "POSTGRES_USER": postgres_user,
         "POSTGRES_PASSWORD": postgres_password,
-        "POSTGRES_DB": "litellm",
+        "POSTGRES_DB": postgres_db,
         "VALKEY_PASSWORD": valkey_password,
         "LANGFUSE_SECRET_KEY": langfuse_secret_key,
         "LANGFUSE_PUBLIC_KEY": langfuse_public_key,
         "NEXTAUTH_SECRET": nextauth_secret,
         "SALT": langfuse_salt,
         "LANGFUSE_INIT_USER_PASSWORD": langfuse_init_password,
-        "CUSTOM_ENDPOINT_URL": custom_endpoint["url"] if custom_endpoint else "",
-        "CUSTOM_ENDPOINT_KEY": custom_endpoint["key"] if custom_endpoint else "",
-        "QWEN3_API_BASE": qwen3_endpoint["url"] if qwen3_endpoint else "",
-        "QWEN3_API_KEY": qwen3_endpoint["key"] if qwen3_endpoint else "",
+        "CUSTOM_ENDPOINT_URL": custom_url,
+        "CUSTOM_ENDPOINT_KEY": custom_key,
+        "QWEN3_API_BASE": qwen3_url,
+        "QWEN3_API_KEY": qwen3_key,
     }
 
 
 # ---------------------------------------------------------------------------
-# Step 8 — Write files
+# Step 9 — Write files
 # ---------------------------------------------------------------------------
 
 
@@ -469,10 +792,11 @@ def write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint):
     print(f"  {green('✓')} Written: {env_path}")
 
 
-def build_litellm_config(custom_endpoint):
+def build_litellm_config(custom_endpoint, headroom=None):
     """
     Build litellm_config.yaml content based on whether a custom endpoint
-    is configured. Constructs the file from fixed blocks.
+    and/or Headroom compression are configured. Constructs the file from
+    fixed blocks.
     """
     vertex_model_block = """\
   # ── Vertex AI: Gemini models ───────────────────────────────────────────────
@@ -620,7 +944,88 @@ def build_litellm_config(custom_endpoint):
       vertex_credentials: /secrets/gcp-credentials.json
 """
 
-    router_and_settings = """\
+    build_compressed_block = """\
+
+  # ── Routing group: "build-compressed" ─────────────────────────────────────
+  # Same models as "build" but with Headroom token compression applied as a
+  # pre_call guardrail. Requires the Headroom service to be running.
+  - model_name: build-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: build-compressed
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+"""
+
+    smart_compressed_with_custom = """\
+
+  # ── Routing group: "smart-compressed" ─────────────────────────────────────
+  # Same models as "smart" but with Headroom token compression applied.
+  - model_name: smart-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: openai/qwen2.5-coder:32b
+      api_base: os.environ/CUSTOM_ENDPOINT_URL
+      api_key: os.environ/CUSTOM_ENDPOINT_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+"""
+
+    smart_compressed_without_custom = """\
+
+  # ── Routing group: "smart-compressed" ─────────────────────────────────────
+  # Same models as "smart" but with Headroom token compression applied.
+  - model_name: smart-compressed
+    max_input_tokens: 40960
+    litellm_params:
+      model: openai/Qwen/Qwen3-14B
+      api_base: os.environ/QWEN3_API_BASE
+      api_key: os.environ/QWEN3_API_KEY
+
+  - model_name: smart-compressed
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-04-17
+      vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+      vertex_credentials: /secrets/gcp-credentials.json
+"""
+
+    headroom_guardrails_block = """\
+
+# =============================================================================
+# Guardrails
+# =============================================================================
+# Headroom runs as a sidecar service (port 8787) and compresses prompts before
+# they reach the LLM. Use routing groups "build-compressed" or "smart-compressed"
+# to opt in, or attach this guardrail to a virtual key via the LiteLLM Admin UI.
+guardrails:
+  - guardrail_name: headroom-compression
+    litellm_params:
+      guardrail: headroom
+      mode: pre_call
+      api_base: http://headroom:8787
+      default_on: false  # opt-in only; set true to compress every request
+"""
+
+    router_settings_header = """\
 
 # =============================================================================
 # Router settings
@@ -632,15 +1037,24 @@ router_settings:
   fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
+"""
+
+    router_settings_footer = """\
   context_window_fallbacks:
     - {"qwen3-14b": ["claude-sonnet-4-6"]}
     - {"build": ["claude-sonnet-4-6"]}
+"""
+
+    router_settings_end = """\
     - {"smart": ["gemini-2-5-pro"]}
 
   # Valkey for shared rate-limit state across restarts
   redis_host: valkey
   redis_port: 6379
   redis_password: os.environ/VALKEY_PASSWORD
+"""
+
+    general_settings = """\
 
 # =============================================================================
 # General proxy settings
@@ -679,24 +1093,51 @@ model_list:
 
 """
 
+    extra_fallbacks = ""
+    extra_cwfallbacks = ""
+    if headroom:
+        extra_fallbacks = (
+            '    - {"smart-compressed": ["gemini-2-5-pro"]}\n'
+            '    - {"build-compressed": ["claude-sonnet-4-6"]}\n'
+        )
+        extra_cwfallbacks = '    - {"build-compressed": ["claude-sonnet-4-6"]}\n'
+
+    router_and_settings = (
+        router_settings_header
+        + extra_fallbacks
+        + router_settings_footer
+        + extra_cwfallbacks
+        + router_settings_end
+        + general_settings
+    )
+
     parts = [header, vertex_model_block]
     if custom_endpoint:
         parts.append(custom_model_block)
     parts.append(build_routing_block)
+    if headroom:
+        parts.append(build_compressed_block)
     if custom_endpoint:
         parts.append(smart_block_with_custom)
     else:
         parts.append(smart_block_without_custom)
+    if headroom:
+        if custom_endpoint:
+            parts.append(smart_compressed_with_custom)
+        else:
+            parts.append(smart_compressed_without_custom)
+    if headroom:
+        parts.append(headroom_guardrails_block)
     parts.append(router_and_settings)
 
     return "".join(parts)
 
 
-def write_litellm_config(out_dir, custom_endpoint):
+def write_litellm_config(out_dir, custom_endpoint, headroom=None):
     config_dir = out_dir / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     dest = config_dir / "litellm_config.yaml"
-    content = build_litellm_config(custom_endpoint)
+    content = build_litellm_config(custom_endpoint, headroom=headroom)
     dest.write_text(content)
     print(f"  {green('✓')} Written: {dest}")
 
@@ -752,15 +1193,41 @@ def apply_gcp_credentials(gcp_creds, out_dir):
 # ---------------------------------------------------------------------------
 
 
-def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint):
+def print_summary(
+    out_dir,
+    sec,
+    gcp_project,
+    vertex_location,
+    custom_endpoint,
+    qwen3_endpoint,
+    headroom=None,
+    merge_mode: bool = False,
+    backup_files: Optional[List[str]] = None,
+):
     section("Setup complete — save these values")
 
-    print(
-        textwrap.dedent(f"""\
-      {yellow("These secrets are written to .env and will not be shown again.")}
-      Store them somewhere safe (e.g. a password manager).
-    """)
-    )
+    if backup_files is None:
+        backup_files = []
+
+    if merge_mode:
+        print(green("  ✓ Merge completed successfully"))
+        print(green("  ✓ Existing secrets preserved — no data loss"))
+        print(green("  ✓ Configuration files updated from latest templates"))
+        print()
+        print(yellow("  The following critical secrets were PRESERVED from your existing .env:"))
+        print(yellow("    • LITELLM_SALT_KEY (database encryption — must never change)"))
+        print(yellow("    • LITELLM_MASTER_KEY"))
+        print(yellow("    • POSTGRES_PASSWORD"))
+        print(yellow("    • LANGFUSE_SECRET_KEY / LANGFUSE_PUBLIC_KEY"))
+        print(yellow("    • NEXTAUTH_SECRET, SALT, VALKEY_PASSWORD"))
+        print()
+    else:
+        print(
+            textwrap.dedent(f"""\
+          {yellow("These secrets are written to .env and will not be shown again.")}
+          Store them somewhere safe (e.g. a password manager).
+        """)
+        )
 
     col = 36
 
@@ -782,15 +1249,42 @@ def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, q
         row("QWEN3_API_BASE", qwen3_endpoint["url"])
     if custom_endpoint:
         row("CUSTOM_ENDPOINT_URL", custom_endpoint["url"])
+    if headroom:
+        print(
+            f"\n  {green('Headroom:')} token compression enabled"
+            " (build-compressed, smart-compressed)"
+        )
     if not qwen3_endpoint and not custom_endpoint:
         print(
-            f"\n  {yellow('smart model:')} routes Gemini Flash → Gemini Pro (no local endpoint configured)"
+            f"\n  {yellow('smart model:')} routes Gemini Flash → Gemini Pro"
+            " (no local endpoint configured)"
         )
+
+    if backup_files:
+        print()
+        print(cyan("  Backups created:"))
+        for f in backup_files:
+            print(cyan(f"    • {f}"))
 
     print()
     hr()
     print(bold("  Next steps"))
     hr()
+
+    headroom_step = (
+        textwrap.dedent("""\
+
+      6. Check Headroom is running:
+           curl http://localhost:8787/health
+           # Use model "build-compressed" or "smart-compressed" to compress prompts.
+    """)
+        if headroom
+        else ""
+    )
+
+    restart_num = "7" if headroom else "6"
+    update_num = "8" if headroom else "7"
+
     print(
         textwrap.dedent(f"""\
 
@@ -811,11 +1305,14 @@ def print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, q
            LiteLLM UI     http://localhost:4000/ui     (master key: {sec["LITELLM_MASTER_KEY"]})
            Langfuse       http://localhost:3000         (admin@local.dev / {sec["LANGFUSE_INIT_USER_PASSWORD"]})
            Open WebUI     http://localhost:8080         (first account becomes admin)
+    """)
+        + headroom_step
+        + textwrap.dedent(f"""\
 
-      6. If LiteLLM fails to start because Postgres wasn't ready:
+      {restart_num}. If LiteLLM fails to start because Postgres wasn't ready:
            podman compose restart litellm
 
-      7. To update all images later:
+      {update_num}. To update all images later:
            podman compose pull && podman compose up -d
     """)
     )
@@ -833,20 +1330,31 @@ def main():
 
     # Collect all inputs before writing anything
     out_dir = get_output_dir()
-    check_existing_env(out_dir)
-    gcp_creds = setup_gcp_credentials(out_dir)
-    gcp_project, vertex_location = get_gcp_config()
-    qwen3_endpoint = get_qwen3_endpoint()
-    custom_endpoint = get_custom_endpoint()
-    sec = generate_secrets(custom_endpoint, qwen3_endpoint)
+
+    # Step 2: existing .env — returns None (fresh/overwrite) or dict (merge)
+    existing_secrets = check_existing_env(out_dir)
+
+    gcp_creds = setup_gcp_credentials(out_dir, existing_secrets)
+    gcp_project, vertex_location = get_gcp_config(existing_secrets)
+    qwen3_endpoint = get_qwen3_endpoint(existing_secrets)
+    custom_endpoint = get_custom_endpoint(existing_secrets)
+    headroom = get_headroom_config(existing_secrets)
+    sec = generate_secrets(custom_endpoint, qwen3_endpoint, existing_secrets)
 
     # Confirm before writing
-    section("Step 8 of 8 — Writing files")
+    section("Step 9 of 9 — Writing files")
     print(f"  Output directory: {cyan(str(out_dir))}")
+    if existing_secrets is not None:
+        print(green("  Mode: MERGE (existing secrets preserved)"))
+    else:
+        print(yellow("  Mode: FRESH INSTALL (new secrets generated)"))
     print()
     if not prompt_yes_no("Proceed and write all files?", default=True):
         print(red("\n  Aborted. No files were written."))
         sys.exit(0)
+
+    # Optional backups — prompt only if files already exist
+    backup_files = prompt_and_create_backups(out_dir)
     print()
 
     # Create directory structure
@@ -856,11 +1364,21 @@ def main():
     # Write files
     apply_gcp_credentials(gcp_creds, out_dir)
     write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint)
-    write_litellm_config(out_dir, custom_endpoint)
+    write_litellm_config(out_dir, custom_endpoint, headroom=headroom)
     write_compose(out_dir)
     write_gitignore(out_dir)
 
-    print_summary(out_dir, sec, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint)
+    print_summary(
+        out_dir,
+        sec,
+        gcp_project,
+        vertex_location,
+        custom_endpoint,
+        qwen3_endpoint,
+        headroom=headroom,
+        merge_mode=existing_secrets is not None,
+        backup_files=backup_files,
+    )
 
 
 if __name__ == "__main__":
