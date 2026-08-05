@@ -10,7 +10,7 @@
 // Prerequisites:
 //   - Stack running:  podman compose up -d  (from ~/ai-stack/)
 //   - API key stored: opencode /connect → select "litellm" → paste LITELLM_MASTER_KEY
-//   - Langfuse creds: ~/config/opencode/opencode-langfuse.json  (see samples/opencode-langfuse.json)
+//   - Langfuse creds: ~/.config/opencode/opencode-langfuse.json  (see samples/opencode-langfuse.json)
 // =============================================================================
 {
   "$schema": "https://opencode.ai/config.json",
