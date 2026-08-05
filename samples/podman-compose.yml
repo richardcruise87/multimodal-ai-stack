@@ -136,7 +136,7 @@ services:
       - "8787:8787"
     environment:
       HEADROOM_TELEMETRY: "off"
-    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    command: ["proxy", "--host", "0.0.0.0", "--port", "8787"]
     volumes:
       - headroom_cache:/app/.headroom
     healthcheck:
