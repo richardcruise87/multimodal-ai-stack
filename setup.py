@@ -804,12 +804,18 @@ def build_litellm_config(custom_endpoint, headroom=None):
     """
     vertex_model_block = """\
   # ── Vertex AI: Gemini models ───────────────────────────────────────────────
+  # input_cost_per_token / output_cost_per_token are set explicitly here
+  # because LiteLLM's pricing DB does not have a direct key for these
+  # vertex_ai/ model strings, causing $0 cost to be logged in Langfuse.
+  # Prices are per-token (USD). Source: cloud.google.com/vertex-ai/pricing
   - model_name: gemini-2-5-pro
     litellm_params:
       model: vertex_ai/gemini-2.5-pro
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.00000125   # $1.25 / 1M tokens
+      output_cost_per_token: 0.00001     # $10.00 / 1M tokens
 
   - model_name: gemini-2-5-flash
     litellm_params:
@@ -817,6 +823,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.0000003    # $0.30 / 1M tokens
+      output_cost_per_token: 0.0000025   # $2.50 / 1M tokens
 
   # ── Anthropic Claude models (via Vertex AI) ────────────────────────────────
   - model_name: claude-sonnet-4-6
@@ -857,12 +865,17 @@ def build_litellm_config(custom_endpoint, headroom=None):
   # ── Qwen3-14B (external OpenAI-compatible / vLLM endpoint) ─────────────────
   # max_input_tokens reflects the actual deployed limit (original_max_position_embeddings).
   # Requests exceeding this will be routed to the fallback before being sent.
+  # input/output_cost_per_token: LiteLLM has no entry for openai/Qwen/Qwen3-14B;
+  # set to 0 explicitly so Langfuse shows $0 (free internal endpoint) rather
+  # than a missing/null cost. Update if your endpoint charges a rate.
   - model_name: qwen3-14b
     max_input_tokens: 40960
     litellm_params:
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 """
 
     custom_model_block = """\
@@ -893,12 +906,16 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart
     litellm_params:
       model: openai/qwen2.5-coder:32b
       api_base: os.environ/CUSTOM_ENDPOINT_URL
       api_key: os.environ/CUSTOM_ENDPOINT_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart
     litellm_params:
@@ -906,6 +923,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.0000003    # $0.30 / 1M tokens
+      output_cost_per_token: 0.0000025   # $2.50 / 1M tokens
 """
 
     smart_block_without_custom = """\
@@ -919,6 +938,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart
     litellm_params:
@@ -926,6 +947,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.0000003    # $0.30 / 1M tokens
+      output_cost_per_token: 0.0000025   # $2.50 / 1M tokens
 """
 
     build_routing_block = """\
@@ -939,6 +962,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: build
     litellm_params:
@@ -959,6 +984,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: build-compressed
     litellm_params:
@@ -978,12 +1005,16 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart-compressed
     litellm_params:
       model: openai/qwen2.5-coder:32b
       api_base: os.environ/CUSTOM_ENDPOINT_URL
       api_key: os.environ/CUSTOM_ENDPOINT_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart-compressed
     litellm_params:
@@ -991,6 +1022,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.0000003    # $0.30 / 1M tokens
+      output_cost_per_token: 0.0000025   # $2.50 / 1M tokens
 """
 
     smart_compressed_without_custom = """\
@@ -1003,6 +1036,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       model: openai/Qwen/Qwen3-14B
       api_base: os.environ/QWEN3_API_BASE
       api_key: os.environ/QWEN3_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
 
   - model_name: smart-compressed
     litellm_params:
@@ -1010,6 +1045,8 @@ def build_litellm_config(custom_endpoint, headroom=None):
       vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
       vertex_location: os.environ/VERTEX_LOCATION
       vertex_credentials: /secrets/gcp-credentials.json
+      input_cost_per_token: 0.0000003    # $0.30 / 1M tokens
+      output_cost_per_token: 0.0000025   # $2.50 / 1M tokens
 """
 
     headroom_guardrails_block = """\
