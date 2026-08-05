@@ -23,6 +23,7 @@ The stack itself lives **outside this repo** in `~/ai-stack/` (or wherever the u
 | `samples/config/litellm_config.yaml` | Reference LiteLLM config (copied by setup) |
 | `samples/opencode.jsonc` | Reference OpenCode config (copy to `~/.config/opencode/opencode.jsonc`) |
 | `samples/opencode-langfuse.json` | Reference Langfuse plugin credentials (copy to `~/.config/opencode/opencode-langfuse.json`, chmod 600) |
+| `samples/claude-settings.json` | Reference Claude Code settings (copy to `~/.claude/settings.json`) |
 | `tests/test_setup.py` | Unit tests for `setup.py` pure functions |
 | `~/ai-stack/.env` | All secrets — never commit |
 | `~/ai-stack/secrets/gcp-credentials.json` | GCP service account key — never commit |
