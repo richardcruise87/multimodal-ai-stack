@@ -159,6 +159,8 @@ def gen_langfuse_public_key():
 
 REPO_ROOT = Path(__file__).resolve().parent
 SAMPLE_COMPOSE = REPO_ROOT / "samples" / "podman-compose.yml"
+SAMPLE_OPENCODE = REPO_ROOT / "samples" / "opencode.jsonc"
+SAMPLE_CLAUDE = REPO_ROOT / "samples" / "claude-settings.json"
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +195,7 @@ def print_banner():
 
 
 def get_output_dir():
-    section("Step 1 of 9 — Output directory")
+    section("Step 1 of 10 — Output directory")
     default = str(Path.home() / "ai-stack")
     raw = prompt("Stack directory", default=default)
     out = Path(raw).expanduser().resolve()
@@ -273,7 +275,7 @@ def check_existing_env(out_dir: Path) -> Optional[Dict[str, str]]:
     if not env_path.exists():
         return None  # Fresh install — nothing to worry about
 
-    section("Step 2 of 9 — Existing .env detected")
+    section("Step 2 of 10 — Existing .env detected")
     print(yellow(f"  Found existing .env at: {env_path}"))
     print()
 
@@ -413,7 +415,7 @@ def setup_gcp_credentials(out_dir: Path, existing_secrets: Optional[Dict] = None
     Choosing 'skip' at any point returns None, which signals apply_gcp_credentials
     to leave existing credentials untouched.
     """
-    section("Step 3 of 9 — GCP credentials")
+    section("Step 3 of 10 — GCP credentials")
     secrets_dir = out_dir / "secrets"
     dest = secrets_dir / "gcp-credentials.json"
 
@@ -474,7 +476,7 @@ def get_gcp_config(existing_secrets: Optional[Dict] = None):
 
     In merge mode the current values are shown and kept by default.
     """
-    section("Step 4 of 9 — GCP / Vertex AI project")
+    section("Step 4 of 10 — GCP / Vertex AI project")
 
     if existing_secrets:
         current_project = existing_secrets.get("GOOGLE_CLOUD_PROJECT", "")
@@ -507,7 +509,7 @@ def get_qwen3_endpoint(existing_secrets: Optional[Dict] = None):
 
     In merge mode, an existing URL is shown and kept by default.
     """
-    section("Step 5 of 9 — Qwen3-14B endpoint")
+    section("Step 5 of 10 — Qwen3-14B endpoint")
 
     if existing_secrets:
         existing_url = existing_secrets.get("QWEN3_API_BASE", "")
@@ -554,7 +556,7 @@ def get_custom_endpoint(existing_secrets: Optional[Dict] = None):
 
     In merge mode, an existing URL is shown and kept by default.
     """
-    section("Step 6 of 9 — Local model endpoint (Ollama / custom)")
+    section("Step 6 of 10 — Local model endpoint (Ollama / custom)")
 
     if existing_secrets:
         existing_url = existing_secrets.get("CUSTOM_ENDPOINT_URL", "")
@@ -605,7 +607,7 @@ def get_headroom_config(existing_secrets: Optional[Dict] = None):
     this prompt on every merge run.  This is intentional — it lets them toggle
     Headroom on or off during any upgrade without storing extra state in .env.
     """
-    section("Step 7 of 9 — Headroom token compression (optional)")
+    section("Step 7 of 10 — Headroom token compression (optional)")
 
     if existing_secrets is not None:
         print("  Headroom is optional token compression (15–95% savings).")
@@ -661,7 +663,7 @@ def generate_secrets(
     get_custom_endpoint(), which in merge mode already contain the preserved or
     updated values chosen by the user.
     """
-    section("Step 8 of 9 — Secrets")
+    section("Step 8 of 10 — Secrets")
     merge = existing_secrets is not None
 
     if merge:
@@ -1217,6 +1219,86 @@ def write_gitignore(out_dir):
         print(f"  {green('✓')} Written: {gitignore}")
 
 
+def write_opencode_langfuse_config(sec, username):
+    """
+    Write OpenCode Langfuse credentials to ~/.config/opencode/opencode-langfuse.json.
+
+    Generates the JSON from scratch using LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
+    from the generated secrets dict.  Sets chmod 600 because the file contains a
+    secret key.  Falls back to placeholder strings if keys are missing from sec
+    (e.g. old .env that pre-dates Langfuse) so the file is still parseable.
+    """
+    import json as _json
+
+    config_dir = Path.home() / ".config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    dest = config_dir / "opencode-langfuse.json"
+
+    data = {
+        "publicKey": sec.get("LANGFUSE_PUBLIC_KEY", "lf-pk-<missing-from-env>"),
+        "secretKey": sec.get("LANGFUSE_SECRET_KEY", "<missing-from-env>"),
+        "baseUrl": "http://localhost:3000",
+        "environment": "development",
+        "userId": username,
+    }
+
+    dest.write_text(_json.dumps(data, indent=2) + "\n")
+
+    try:
+        dest.chmod(0o600)
+    except Exception as e:
+        print(yellow(f"  Warning: could not set permissions on {dest}: {e}"))
+
+    print(f"  {green('✓')} Written: {dest} (chmod 600)")
+
+
+def write_opencode_config():
+    """
+    Write OpenCode main config to ~/.config/opencode/opencode.jsonc.
+
+    Copies samples/opencode.jsonc verbatim — no substitutions needed because
+    the file references the LiteLLM proxy by URL (localhost:4000) and the API
+    key is stored separately via 'opencode /connect'.
+    """
+    config_dir = Path.home() / ".config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    dest = config_dir / "opencode.jsonc"
+
+    if not SAMPLE_OPENCODE.exists():
+        print(red(f"  Error: template not found: {SAMPLE_OPENCODE}"))
+        print(red("  Skipping OpenCode config."))
+        return
+
+    shutil.copy2(SAMPLE_OPENCODE, dest)
+    print(f"  {green('✓')} Written: {dest}")
+
+
+def write_claude_config(sec):
+    """
+    Write Claude Code settings to ~/.claude/settings.json.
+
+    Reads samples/claude-settings.json and substitutes the placeholder
+    LITELLM_MASTER_KEY value with the real key from sec.
+    """
+    config_dir = Path.home() / ".claude"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    dest = config_dir / "settings.json"
+
+    if not SAMPLE_CLAUDE.exists():
+        print(red(f"  Error: template not found: {SAMPLE_CLAUDE}"))
+        print(red("  Skipping Claude Code config."))
+        return
+
+    content = SAMPLE_CLAUDE.read_text()
+    content = content.replace(
+        '"sk-<your-litellm-master-key>"',
+        f'"{sec["LITELLM_MASTER_KEY"]}"',
+    )
+
+    dest.write_text(content)
+    print(f"  {green('✓')} Written: {dest}")
+
+
 def apply_gcp_credentials(gcp_creds, out_dir):
     """Perform the symlink/copy action for GCP credentials."""
     if not gcp_creds:
@@ -1241,6 +1323,230 @@ def apply_gcp_credentials(gcp_creds, out_dir):
 
 
 # ---------------------------------------------------------------------------
+# Step 10 — AI harness configuration (OpenCode / Claude Code)
+# ---------------------------------------------------------------------------
+
+
+def backup_ai_harness_configs(harness_config):
+    """
+    Create .bak.N backups for AI harness configs that are about to be updated.
+
+    Uses the same incremental numbering scheme as prompt_and_create_backups():
+    for each candidate file, find the lowest unused .bak.N suffix and copy the
+    file there.  Only files listed under harnesses whose backup flag is True are
+    considered; harnesses where backup=False are skipped entirely.
+
+    Returns a list of absolute path strings for every backup created, or [] if
+    nothing was backed up.
+    """
+    if not harness_config:
+        return []
+
+    home = Path.home()
+    candidates = []
+
+    if harness_config.get("opencode", {}).get("backup"):
+        candidates.extend(
+            [
+                home / ".config" / "opencode" / "opencode.jsonc",
+                home / ".config" / "opencode" / "opencode-langfuse.json",
+            ]
+        )
+
+    if harness_config.get("claude", {}).get("backup"):
+        candidates.append(home / ".claude" / "settings.json")
+
+    existing = [f for f in candidates if f.exists()]
+    if not existing:
+        return []
+
+    backed_up = []
+    for src in existing:
+        # Build the backup path by appending .bak.N to the full filename so
+        # that "opencode.jsonc" becomes "opencode.jsonc.bak.1" (not ".bak.1").
+        n = 1
+        while True:
+            dest = src.parent / f"{src.name}.bak.{n}"
+            if not dest.exists():
+                break
+            n += 1
+        shutil.copy2(src, dest)
+        backed_up.append(str(dest))
+
+    return backed_up
+
+
+def _handle_opencode_config():
+    """
+    Prompt for OpenCode configuration choices.
+
+    If existing config files are detected the user is offered keep/update.
+    Choosing keep returns None (no action).  Choosing update triggers a
+    second prompt for whether to back up first.
+
+    Returns:
+      None                                — keep existing / no action
+      {"enabled": True, "backup": bool}  — write new config (backup if True)
+    """
+    home = Path.home()
+    config_file = home / ".config" / "opencode" / "opencode.jsonc"
+    creds_file = home / ".config" / "opencode" / "opencode-langfuse.json"
+
+    if config_file.exists() or creds_file.exists():
+        print()
+        if config_file.exists():
+            print(yellow(f"  Existing config found:      {config_file}"))
+        if creds_file.exists():
+            print(yellow(f"  Existing credentials found: {creds_file}"))
+        print()
+
+        action = prompt_choice(
+            "Keep existing OpenCode configuration or update from latest template?",
+            [
+                ("k", "Keep existing (default)"),
+                ("u", "Update from template"),
+            ],
+        )
+        if action == "k":
+            print(yellow("  Keeping existing OpenCode configuration."))
+            return None
+
+        print()
+        do_backup = prompt_yes_no(
+            "Backup existing OpenCode configs before updating?",
+            default=True,
+        )
+        return {"enabled": True, "backup": do_backup}
+
+    # No existing files — fresh write, nothing to back up
+    return {"enabled": True, "backup": False}
+
+
+def _handle_claude_config():
+    """
+    Prompt for Claude Code configuration choices.
+
+    Mirrors _handle_opencode_config() but for ~/.claude/settings.json only.
+
+    Returns:
+      None                                — keep existing / no action
+      {"enabled": True, "backup": bool}  — write new config (backup if True)
+    """
+    home = Path.home()
+    config_file = home / ".claude" / "settings.json"
+
+    if config_file.exists():
+        print()
+        print(yellow(f"  Existing config found: {config_file}"))
+        print()
+
+        action = prompt_choice(
+            "Keep existing Claude Code configuration or update from latest template?",
+            [
+                ("k", "Keep existing (default)"),
+                ("u", "Update from template"),
+            ],
+        )
+        if action == "k":
+            print(yellow("  Keeping existing Claude Code configuration."))
+            return None
+
+        print()
+        do_backup = prompt_yes_no(
+            "Backup existing Claude Code config before updating?",
+            default=True,
+        )
+        return {"enabled": True, "backup": do_backup}
+
+    return {"enabled": True, "backup": False}
+
+
+def get_ai_harness_config():
+    """
+    Step 10: optionally configure OpenCode and/or Claude Code.
+
+    Always runs so the user can always reach this step with a single keypress
+    to skip.  The harness selection prompt is shown first; if the user picks
+    skip the function returns None immediately without sub-prompts.
+
+    For each selected harness, _handle_*_config() is called to detect existing
+    files and collect keep/update/backup preferences.
+
+    Returns a dict:
+      {
+          "opencode": {"enabled": True, "backup": bool} | None,
+          "claude":   {"enabled": True, "backup": bool} | None,
+          "username": str,   # present only when opencode is enabled
+      }
+    or None if the user skips entirely or all harnesses resolve to keep-existing.
+    """
+    section("Step 10 of 10 — AI harness configuration (optional)")
+
+    print(
+        textwrap.dedent("""\
+      Configure OpenCode and/or Claude Code to route through the LiteLLM proxy?
+      Both harnesses authenticate with the LITELLM_MASTER_KEY from your .env.
+
+      OpenCode also receives Langfuse observability credentials automatically
+      (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY written to opencode-langfuse.json).
+    """)
+    )
+
+    choice = prompt_choice(
+        "Which harnesses would you like to configure?",
+        [
+            ("s", "Skip (default)"),
+            ("o", "OpenCode only"),
+            ("c", "Claude Code only"),
+            ("b", "Both"),
+        ],
+    )
+
+    if choice == "s":
+        print(yellow("  Skipping AI harness configuration."))
+        return None
+
+    result: Dict[str, object] = {}
+
+    if choice in ("o", "b"):
+        opencode_cfg = _handle_opencode_config()
+        if opencode_cfg:
+            result["opencode"] = opencode_cfg
+
+            # Langfuse username — optional label used for filtering traces
+            try:
+                import os as _os
+
+                default_user = _os.getlogin()
+            except Exception:
+                default_user = "user"
+            username = prompt(
+                "Langfuse username (optional, for trace filtering)",
+                default=default_user,
+            )
+            result["username"] = username
+
+    if choice in ("c", "b"):
+        claude_cfg = _handle_claude_config()
+        if claude_cfg:
+            result["claude"] = claude_cfg
+
+    if not result:
+        # Both harnesses were "keep existing" — nothing to write
+        return None
+
+    print()
+    if result.get("opencode"):
+        backup_note = "backup requested" if result["opencode"]["backup"] else "no backup"
+        print(green(f"  ✓ Will configure OpenCode ({backup_note})"))
+    if result.get("claude"):
+        backup_note = "backup requested" if result["claude"]["backup"] else "no backup"
+        print(green(f"  ✓ Will configure Claude Code ({backup_note})"))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -1255,6 +1561,8 @@ def print_summary(
     headroom=None,
     merge_mode: bool = False,
     backup_files: Optional[List[str]] = None,
+    harness_config: Optional[Dict] = None,
+    harness_backups: Optional[List[str]] = None,
 ):
     section("Setup complete — save these values")
 
@@ -1317,6 +1625,39 @@ def print_summary(
         print(cyan("  Backups created:"))
         for f in backup_files:
             print(cyan(f"    • {f}"))
+
+    # AI harness configuration summary
+    if harness_config:
+        print()
+        hr()
+        print(bold("  AI Harness Configuration"))
+        hr()
+        if harness_config.get("opencode"):
+            home = Path.home()
+            print(f"  {green('OpenCode')}")
+            print(f"    Config:      {home / '.config' / 'opencode' / 'opencode.jsonc'}")
+            print(
+                f"    Credentials: {home / '.config' / 'opencode' / 'opencode-langfuse.json'}"
+                "  (chmod 600)"
+            )
+            if harness_config.get("username"):
+                print(f"    Langfuse user: {cyan(harness_config['username'])}")
+            print()
+            print(
+                yellow(
+                    "    Reminder: store the API key with:  opencode /connect  → select 'litellm'"
+                )
+            )
+        if harness_config.get("claude"):
+            home = Path.home()
+            print(f"  {green('Claude Code')}")
+            print(f"    Config: {home / '.claude' / 'settings.json'}")
+            print(yellow("    ANTHROPIC_API_KEY is set to your LITELLM_MASTER_KEY in that file."))
+        if harness_backups:
+            print()
+            print(cyan(f"  AI harness backups ({len(harness_backups)}):"))
+            for f in harness_backups:
+                print(cyan(f"    • {f}"))
 
     print()
     hr()
@@ -1392,9 +1733,10 @@ def main():
     custom_endpoint = get_custom_endpoint(existing_secrets)
     headroom = get_headroom_config(existing_secrets)
     sec = generate_secrets(custom_endpoint, qwen3_endpoint, existing_secrets)
+    harness_config = get_ai_harness_config()
 
     # Confirm before writing
-    section("Step 9 of 9 — Writing files")
+    section("Step 9 of 10 — Writing files")
     print(f"  Output directory: {cyan(str(out_dir))}")
     if existing_secrets is not None:
         print(green("  Mode: MERGE (existing secrets preserved)"))
@@ -1420,6 +1762,23 @@ def main():
     write_compose(out_dir)
     write_gitignore(out_dir)
 
+    # Write AI harness configs (OpenCode / Claude Code) if requested
+    harness_backups: List[str] = []
+    if harness_config:
+        harness_backups = backup_ai_harness_configs(harness_config)
+        if harness_backups:
+            print()
+            print(green(f"  {green('✓')} Created {len(harness_backups)} AI harness backup(s):"))
+            for f in harness_backups:
+                print(green(f"      • {f}"))
+        print()
+        if harness_config.get("opencode"):
+            username = harness_config.get("username", "user")
+            write_opencode_config()
+            write_opencode_langfuse_config(sec, username)
+        if harness_config.get("claude"):
+            write_claude_config(sec)
+
     print_summary(
         out_dir,
         sec,
@@ -1430,6 +1789,8 @@ def main():
         headroom=headroom,
         merge_mode=existing_secrets is not None,
         backup_files=backup_files,
+        harness_config=harness_config,
+        harness_backups=harness_backups,
     )
 
 
