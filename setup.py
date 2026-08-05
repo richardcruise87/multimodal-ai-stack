@@ -1292,7 +1292,7 @@ def write_claude_config(sec):
     content = SAMPLE_CLAUDE.read_text()
     content = content.replace(
         '"sk-<your-litellm-master-key>"',
-        f'"{sec["LITELLM_MASTER_KEY"]}"',
+        f'"{sec.get("LITELLM_MASTER_KEY", "")}"',
     )
 
     dest.write_text(content)
@@ -1515,9 +1515,9 @@ def get_ai_harness_config():
 
             # Langfuse username — optional label used for filtering traces
             try:
-                import os as _os
+                import getpass
 
-                default_user = _os.getlogin()
+                default_user = getpass.getuser()
             except Exception:
                 default_user = "user"
             username = prompt(
@@ -1733,7 +1733,6 @@ def main():
     custom_endpoint = get_custom_endpoint(existing_secrets)
     headroom = get_headroom_config(existing_secrets)
     sec = generate_secrets(custom_endpoint, qwen3_endpoint, existing_secrets)
-    harness_config = get_ai_harness_config()
 
     # Confirm before writing
     section("Step 9 of 10 — Writing files")
@@ -1761,6 +1760,10 @@ def main():
     write_litellm_config(out_dir, custom_endpoint, headroom=headroom)
     write_compose(out_dir)
     write_gitignore(out_dir)
+
+    # Step 10: AI harness configuration — collected here (after stack files are
+    # written) so the step number prints in the correct order.
+    harness_config = get_ai_harness_config()
 
     # Write AI harness configs (OpenCode / Claude Code) if requested
     harness_backups: List[str] = []
