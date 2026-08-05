@@ -1,0 +1,98 @@
+// =============================================================================
+// OpenCode configuration — sample for the multimodal-ai-stack
+//
+// Copy to: ~/.config/opencode/opencode.jsonc
+//
+// This config routes all OpenCode traffic through the local LiteLLM proxy
+// (port 4000). The proxy handles model routing, fallbacks, cost tracking,
+// and Langfuse observability.
+//
+// Prerequisites:
+//   - Stack running:  podman compose up -d  (from ~/ai-stack/)
+//   - API key stored: opencode /connect → select "litellm" → paste LITELLM_MASTER_KEY
+//   - Langfuse creds: ~/config/opencode/opencode-langfuse.json  (see samples/opencode-langfuse.json)
+// =============================================================================
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // ── Langfuse observability ─────────────────────────────────────────────────
+  // Enable OpenTelemetry so the Langfuse plugin can receive full session
+  // telemetry: turns, generations, tool calls, reasoning, and compaction.
+  // Credentials are read from ~/.config/opencode/opencode-langfuse.json.
+  //
+  // This is separate from LiteLLM's own Langfuse callback (which records
+  // per-completion cost). Both integrations run simultaneously.
+  "experimental": {
+    "openTelemetry": true
+  },
+  "plugin": ["@langfuse/opencode-observability-plugin@latest"],
+
+  // ── Default model ──────────────────────────────────────────────────────────
+  // "smart" is a cost-based routing group: Qwen3-14B → local Ollama → Gemini
+  // Flash → Gemini Pro. Change to any model ID listed under provider.litellm.models.
+  "model": "litellm/smart",
+
+  // ── Providers ─────────────────────────────────────────────────────────────
+  "provider": {
+
+    // ── LiteLLM local proxy (primary) ──────────────────────────────────────
+    // All models below are routing aliases defined in litellm_config.yaml.
+    // The API key is the LITELLM_MASTER_KEY from ~/ai-stack/.env.
+    // Store it with:  opencode /connect  → select "litellm"
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteLLM (local proxy)",
+      "options": {
+        "baseURL": "http://localhost:4000/v1"
+      },
+      "models": {
+        // ── Routing groups ──────────────────────────────────────────────────
+        // "smart": Qwen3-14B → Ollama qwen-coder → Gemini Flash → Gemini Pro
+        "smart":                  { "name": "Smart (auto-route)" },
+        // "build": Qwen3-14B (40k ctx limit) → Claude Sonnet 4.6 fallback
+        "build":                  { "name": "Build (Qwen3→Claude)" },
+        // Headroom-compressed variants — same routing, prompts compressed first
+        "smart-compressed":       { "name": "Smart + Headroom compression" },
+        "build-compressed":       { "name": "Build + Headroom compression" },
+
+        // ── Individual models (direct selection) ───────────────────────────
+        "gemini-2-5-pro":         { "name": "Gemini 2.5 Pro" },
+        "gemini-2-5-flash":       { "name": "Gemini 2.5 Flash" },
+        "claude-sonnet-4-6":      { "name": "Claude Sonnet 4.6" },
+        "claude-sonnet-4-5":      { "name": "Claude Sonnet 4.5" },
+        "claude-opus-4":          { "name": "Claude Opus 4" },
+        "claude-opus-4-5":        { "name": "Claude Opus 4.5" },
+        "claude-haiku-4-5":       { "name": "Claude Haiku 4.5" },
+
+        // ── Optional endpoints (omit if not configured in setup.py) ────────
+        "qwen3-14b":              { "name": "Qwen3 14B (external vLLM)" },
+        "llama-local":            { "name": "Llama 3.3 70B (local Ollama)" },
+        "qwen-coder":             { "name": "Qwen 2.5 Coder 32B (local Ollama)" }
+      }
+    },
+
+    // ── Direct Vertex AI (fallback — bypasses LiteLLM) ─────────────────────
+    // Used when LiteLLM is down or for testing without the proxy.
+    // Requires env vars: GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_CLOUD_PROJECT,
+    // VERTEX_LOCATION.  Switch in-session with /models.
+    "google-vertex": {}
+  },
+
+  // ── Agent model assignments ────────────────────────────────────────────────
+  // Each OpenCode agent can use a different model. These defaults balance cost
+  // and capability for each agent's workload.
+  "agent": {
+    // build: code-writing agent — Qwen3-14B free, falls back to Claude Sonnet
+    "build": {
+      "model": "litellm/build"
+    },
+    // plan: planning agent — Gemini Flash is fast and cheap for outlining
+    "plan": {
+      "model": "litellm/gemini-2-5-flash"
+    },
+    // explore: codebase exploration — Gemini Flash handles large contexts well
+    "explore": {
+      "model": "litellm/gemini-2-5-flash"
+    }
+  }
+}
