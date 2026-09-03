@@ -23,8 +23,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+volumes:
+  - postgres_data:/var/lib/postgresql/data:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -36,8 +36,8 @@ services:
     image: valkey/valkey:latest
     restart: always
     command: valkey-server --requirepass ${VALKEY_PASSWORD} --save 60 1 --loglevel warning
-    volumes:
-      - valkey_data:/data
+volumes:
+  - valkey_data:/data:Z
     healthcheck:
       test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
       interval: 10s
@@ -67,6 +67,12 @@ services:
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
       QWEN3_API_BASE: ${QWEN3_API_BASE}
       QWEN3_API_KEY: ${QWEN3_API_KEY}
+      NEMOTRON3_120B_API_BASE: ${NEMOTRON3_120B_API_BASE}
+      NEMOTRON3_120B_API_KEY: ${NEMOTRON3_120B_API_KEY}
+      GRANITE4_8B_API_BASE: ${GRANITE4_8B_API_BASE}
+      GRANITE4_8B_API_KEY: ${GRANITE4_8B_API_KEY}
+      MISTRAL_7B_API_BASE: ${MISTRAL_7B_API_BASE}
+      MISTRAL_7B_API_KEY: ${MISTRAL_7B_API_KEY}
       # Langfuse callback connection
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}

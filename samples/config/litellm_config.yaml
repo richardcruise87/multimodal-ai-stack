@@ -11,9 +11,9 @@
 model_list:
 
 fallbacks:
-  - qwen3-14b -> claude-sonnet-4-6
-  - build -> claude-sonnet-4-6
-  - smart -> gemini-2.5-pro
+  - {"smart": ["gemini-2-5-pro"]}
+  - {"build": ["claude-sonnet-4-6"]}
+  - {"smart-compressed": ["gemini-2-5-pro"]}
 
 general_settings:
   max_input_tokens: 40960
