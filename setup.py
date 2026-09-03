@@ -161,6 +161,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 SAMPLE_COMPOSE = REPO_ROOT / "samples" / "podman-compose.yml"
 SAMPLE_OPENCODE = REPO_ROOT / "samples" / "opencode.jsonc"
 SAMPLE_CLAUDE = REPO_ROOT / "samples" / "claude-settings.json"
+SAMPLE_SYSTEMD = REPO_ROOT / "samples" / "aimstack.service"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ def print_banner():
 
 
 def get_output_dir():
-    section("Step 1 of 10 — Output directory")
+    section("Step 1 of 11 — Output directory")
     default = str(Path.home() / "ai-stack")
     raw = prompt("Stack directory", default=default)
     out = Path(raw).expanduser().resolve()
@@ -275,7 +276,7 @@ def check_existing_env(out_dir: Path) -> Optional[Dict[str, str]]:
     if not env_path.exists():
         return None  # Fresh install — nothing to worry about
 
-    section("Step 2 of 10 — Existing .env detected")
+    section("Step 2 of 11 — Existing .env detected")
     print(yellow(f"  Found existing .env at: {env_path}"))
     print()
 
@@ -415,7 +416,7 @@ def setup_gcp_credentials(out_dir: Path, existing_secrets: Optional[Dict] = None
     Choosing 'skip' at any point returns None, which signals apply_gcp_credentials
     to leave existing credentials untouched.
     """
-    section("Step 3 of 10 — GCP credentials")
+    section("Step 3 of 11 — GCP credentials")
     secrets_dir = out_dir / "secrets"
     dest = secrets_dir / "gcp-credentials.json"
 
@@ -476,7 +477,7 @@ def get_gcp_config(existing_secrets: Optional[Dict] = None):
 
     In merge mode the current values are shown and kept by default.
     """
-    section("Step 4 of 10 — GCP / Vertex AI project")
+    section("Step 4 of 11 — GCP / Vertex AI project")
 
     if existing_secrets:
         current_project = existing_secrets.get("GOOGLE_CLOUD_PROJECT", "")
@@ -509,7 +510,7 @@ def get_qwen3_endpoint(existing_secrets: Optional[Dict] = None):
 
     In merge mode, an existing URL is shown and kept by default.
     """
-    section("Step 5 of 10 — Qwen3-14B endpoint")
+    section("Step 5 of 11 — Qwen3-14B endpoint")
 
     if existing_secrets:
         existing_url = existing_secrets.get("QWEN3_API_BASE", "")
@@ -556,7 +557,7 @@ def get_custom_endpoint(existing_secrets: Optional[Dict] = None):
 
     In merge mode, an existing URL is shown and kept by default.
     """
-    section("Step 6 of 10 — Local model endpoint (Ollama / custom)")
+    section("Step 6 of 11 — Local model endpoint (Ollama / custom)")
 
     if existing_secrets:
         existing_url = existing_secrets.get("CUSTOM_ENDPOINT_URL", "")
@@ -607,7 +608,7 @@ def get_headroom_config(existing_secrets: Optional[Dict] = None):
     this prompt on every merge run.  This is intentional — it lets them toggle
     Headroom on or off during any upgrade without storing extra state in .env.
     """
-    section("Step 7 of 10 — Headroom token compression (optional)")
+    section("Step 7 of 11 — Headroom token compression (optional)")
 
     if existing_secrets is not None:
         print("  Headroom is optional token compression (15–95% savings).")
@@ -663,7 +664,7 @@ def generate_secrets(
     get_custom_endpoint(), which in merge mode already contain the preserved or
     updated values chosen by the user.
     """
-    section("Step 8 of 10 — Secrets")
+    section("Step 8 of 11 — Secrets")
     merge = existing_secrets is not None
 
     if merge:
@@ -1299,6 +1300,70 @@ def write_claude_config(sec):
     print(f"  {green('✓')} Written: {dest}")
 
 
+def write_systemd_service(out_dir: Path) -> None:
+    """
+    Step 11: optionally configure a systemd user service for the AI stack.
+
+    Reads samples/aimstack.service, substitutes {STACK_DIR} and {PODMAN_PATH}
+    placeholders, and writes the result to
+    ~/.config/systemd/user/aimstack.service if the user opts in.
+    """
+    section("Step 11 of 11 — Systemd service configuration (optional)")
+
+    print(
+        textwrap.dedent("""\
+      Configure a systemd user service to manage the AI stack?
+      This creates a unit that starts/stops the podman-compose stack and
+      loads environment variables from the stack's .env file.
+    """)
+    )
+
+    if not prompt_yes_no("Enable systemd service for AI stack?", default=False):
+        print(yellow("  Skipping systemd service configuration."))
+        return
+
+    podman_path = shutil.which("podman")
+    if not podman_path:
+        print(red("  Error: podman not found in PATH."))
+        print(red("  Skipping systemd service configuration."))
+        return
+
+    if not SAMPLE_SYSTEMD.exists():
+        print(red(f"  Error: template not found: {SAMPLE_SYSTEMD}"))
+        print(red("  Skipping systemd service configuration."))
+        return
+
+    template = SAMPLE_SYSTEMD.read_text()
+    service_content = template.replace("{STACK_DIR}", str(out_dir))
+    service_content = service_content.replace("{PODMAN_PATH}", podman_path)
+
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    systemd_dir.mkdir(parents=True, exist_ok=True)
+    service_file = systemd_dir / "aimstack.service"
+
+    try:
+        service_file.write_text(service_content)
+    except Exception as e:
+        print(red(f"  Failed to write systemd service: {e}"))
+        return
+
+    print(f"  {green('✓')} Written: {service_file}")
+    print()
+    print(green("  To enable and start the service, run:"))
+    print("    systemctl --user daemon-reload")
+    print("    systemctl --user enable aimstack.service")
+    print("    systemctl --user start aimstack.service")
+    print()
+    print(green("  To view logs:"))
+    print("    journalctl --user -u aimstack.service -f")
+    print()
+    print(green("  To stop the service:"))
+    print("    systemctl --user stop aimstack.service")
+    print()
+    print(yellow("  Note: the service loads environment variables from"))
+    print(yellow(f"        {out_dir}/.env via EnvironmentFile."))
+
+
 def apply_gcp_credentials(gcp_creds, out_dir):
     """Perform the symlink/copy action for GCP credentials."""
     if not gcp_creds:
@@ -1480,7 +1545,7 @@ def get_ai_harness_config():
       }
     or None if the user skips entirely or all harnesses resolve to keep-existing.
     """
-    section("Step 10 of 10 — AI harness configuration (optional)")
+    section("Step 10 of 11 — AI harness configuration (optional)")
 
     print(
         textwrap.dedent("""\
@@ -1735,7 +1800,7 @@ def main():
     sec = generate_secrets(custom_endpoint, qwen3_endpoint, existing_secrets)
 
     # Confirm before writing
-    section("Step 9 of 10 — Writing files")
+    section("Step 9 of 11 — Writing files")
     print(f"  Output directory: {cyan(str(out_dir))}")
     if existing_secrets is not None:
         print(green("  Mode: MERGE (existing secrets preserved)"))
@@ -1781,6 +1846,9 @@ def main():
             write_opencode_langfuse_config(sec, username)
         if harness_config.get("claude"):
             write_claude_config(sec)
+
+    # Step 11: Systemd service configuration
+    write_systemd_service(out_dir)
 
     print_summary(
         out_dir,

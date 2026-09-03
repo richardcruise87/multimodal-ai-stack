@@ -1,0 +1,17 @@
+[Unit]
+Description=LiteLLM AI Stack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+WorkingDirectory={STACK_DIR}
+EnvironmentFile={STACK_DIR}/.env
+ExecStart={PODMAN_PATH} compose up
+ExecStop={PODMAN_PATH} compose down
+TimeoutStartSec=0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
