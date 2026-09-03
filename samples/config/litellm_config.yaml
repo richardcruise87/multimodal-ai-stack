@@ -221,19 +221,16 @@ router_settings:
   num_retries: 2
   timeout: 60
 fallbacks:
-  - qwen3-14b -> claude-sonnet-4-6
-  - build -> claude-sonnet-4-6
-  - smart -> gemini-2.5-pro
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
-    - {"smart-compressed": ["gemini-2-5-pro"]}
-    - {"build-compressed": ["claude-sonnet-4-6"]}
+    - {"smart-compressed": ["smart"]}
+    - {"build-compressed": ["build"]}
   context_window_fallbacks:
     - {"qwen3-14b": ["claude-sonnet-4-6"]}
     - {"build": ["claude-sonnet-4-6"]}
-    - {"build-compressed": ["claude-sonnet-4-6"]}
+    - {"build-compressed": ["build"]}
     - {"smart": ["gemini-2-5-pro"]}
-    - {"smart-compressed": ["gemini-2-5-pro"]}
+    - {"smart-compressed": ["smart"]}
 
   # Valkey for shared rate-limit state across restarts
   redis_host: valkey
