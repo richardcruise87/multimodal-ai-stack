@@ -10,6 +10,15 @@
 
 model_list:
 
+fallbacks:
+  - qwen3-14b -> claude-sonnet-4-6
+  - build -> claude-sonnet-4-6
+  - smart -> gemini-2.5-pro
+
+general_settings:
+  max_input_tokens: 40960
+  max_output_tokens: 4096
+
   # ── Vertex AI: Gemini models ───────────────────────────────────────────────
   # input_cost_per_token / output_cost_per_token are set explicitly here
   # because LiteLLM's pricing DB does not have a direct key for these
@@ -211,7 +220,10 @@ router_settings:
   routing_strategy: cost-based-routing
   num_retries: 2
   timeout: 60
-  fallbacks:
+fallbacks:
+  - qwen3-14b -> claude-sonnet-4-6
+  - build -> claude-sonnet-4-6
+  - smart -> gemini-2.5-pro
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
     - {"smart-compressed": ["gemini-2-5-pro"]}
@@ -249,6 +261,8 @@ guardrails:
 # General proxy settings
 # =============================================================================
 general_settings:
+  max_input_tokens: 40960
+  max_output_tokens: 4096
   master_key: os.environ/LITELLM_MASTER_KEY
   # database_url is passed via DATABASE_URL environment variable in compose
 
