@@ -219,8 +219,8 @@ general_settings:
 router_settings:
   routing_strategy: cost-based-routing
   num_retries: 2
-  timeout: 60
-fallbacks:
+  timeout: 900
+  fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
     - {"smart-compressed": ["smart"]}
