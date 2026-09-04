@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=notify
 WorkingDirectory={STACK_DIR}
 EnvironmentFile={STACK_DIR}/.env
+EnvironmentFile=-{STACK_DIR}/.endpoints.env
 ExecStart={PODMAN_PATH} compose up
 ExecStop={PODMAN_PATH} compose down
 TimeoutStartSec=0

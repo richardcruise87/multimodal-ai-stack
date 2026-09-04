@@ -25,7 +25,8 @@ The stack itself lives **outside this repo** in `~/ai-stack/` (or wherever the u
 | `samples/opencode-langfuse.json` | Reference Langfuse plugin credentials (copy to `~/.config/opencode/opencode-langfuse.json`, chmod 600) |
 | `samples/claude-settings.json` | Reference Claude Code settings (copy to `~/.claude/settings.json`) |
 | `tests/test_setup.py` | Unit tests for `setup.py` pure functions |
-| `~/ai-stack/.env` | All secrets — never commit |
+| `~/ai-stack/.env` | Generated secrets (passwords, keys) — never commit |
+| `~/ai-stack/.endpoints.env` | User-managed GCP/Vertex + custom endpoint config — never commit; setup.py never overwrites it once created |
 | `~/ai-stack/secrets/gcp-credentials.json` | GCP service account key — never commit |
 
 ---
@@ -64,7 +65,7 @@ CI runs on every push/PR to `main`: three jobs — `lint-python` (ruff), `lint-y
 ## Critical constraints
 
 - **`LITELLM_SALT_KEY`** must be generated once and never changed after first use — rotating it corrupts the LiteLLM database. The setup script generates it automatically.
-- **Never commit** `.env` or `secrets/`. Setup adds both to `.gitignore` in the stack directory.
+- **Never commit** `.env`, `.endpoints.env`, or `secrets/`. Setup adds all three to `.gitignore` in the stack directory.
 - This stack uses **Podman Compose** (`podman compose`), not Docker Compose. The compose file uses `restart: always` (not `unless-stopped`) for rootless Podman compatibility. Local model URLs use `host.containers.internal`, not `host.docker.internal`.
 - **`docs/ai-stack-setup.md` contains Docker-specific examples** (`host.docker.internal`, `unless-stopped`) — these are stale. Trust `samples/podman-compose.yml` and `setup.py` over prose docs.
 - From the **host**, reach LiteLLM at `http://localhost:4000`. From inside the Podman network, use `http://litellm:4000`.
