@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -37,7 +37,7 @@ services:
     restart: always
     command: valkey-server --requirepass ${VALKEY_PASSWORD} --save 60 1 --loglevel warning
     volumes:
-      - valkey_data:/data
+      - valkey_data:/data:Z
     healthcheck:
       test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
       interval: 10s
@@ -51,8 +51,8 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./config/litellm_config.yaml:/app/config.yaml:ro
-      - ./secrets/gcp-credentials.json:/secrets/gcp-credentials.json:ro
+      - ./config/litellm_config.yaml:/app/config.yaml:ro,Z
+      - ./secrets/gcp-credentials.json:/secrets/gcp-credentials.json:ro,Z
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
@@ -65,6 +65,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      # Env vars for custom model endpoints and API keys
       QWEN3_API_BASE: ${QWEN3_API_BASE}
       QWEN3_API_KEY: ${QWEN3_API_KEY}
       # Langfuse callback connection
@@ -91,7 +92,7 @@ services:
       POSTGRES_PASSWORD: ${LANGFUSE_SECRET_KEY}
       POSTGRES_DB: langfuse
     volumes:
-      - langfuse_postgres_data:/var/lib/postgresql/data
+      - langfuse_postgres_data:/var/lib/postgresql/data:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
       interval: 10s
@@ -136,15 +137,29 @@ services:
       - "8787:8787"
     environment:
       HEADROOM_TELEMETRY: "off"
+      HEADROOM_COMPRESS_USER_MESSAGES: 1
+      HEADROOM_COMPRESS_ALLOW_REMOTE: 1
     command: ["--host", "0.0.0.0", "--port", "8787"]
     volumes:
-      - headroom_cache:/app/.headroom
+      - headroom_cache:/app/.headroom:Z
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # ── SearXNG (self-hosted metasearch engine) ────────────────────────────────
+  searxng:
+    image: ghcr.io/searxng/searxng:latest
+    restart: always
+    ports:
+      - "4444:8080"
+    volumes:
+      - ./config/searxng:/etc/searxng:ro,Z
+      - searxng_data:/var/cache/searxng:Z
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET_KEY}
 
   # ── Open WebUI (browser chat interface) ────────────────────────────────────
   open-webui:
@@ -153,7 +168,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - open_webui_data:/app/backend/data
+      - open_webui_data:/app/backend/data:Z
     environment:
       # Route Open WebUI through LiteLLM for all model calls
       OPENAI_API_BASE_URL: http://litellm:4000/v1
@@ -161,8 +176,13 @@ services:
       # Disable Ollama auto-detection — LiteLLM handles local models
       ENABLE_OLLAMA_API: "false"
       WEBUI_SECRET_KEY: ${NEXTAUTH_SECRET}
+      # Enable web search via SearXNG
+      ENABLE_WEB_SEARCH: "true"
+      WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "http://searxng:8080/search"
     depends_on:
       - litellm
+      - searxng
 
 volumes:
   postgres_data:
@@ -170,3 +190,4 @@ volumes:
   langfuse_postgres_data:
   open_webui_data:
   headroom_cache:
+  searxng_data:
