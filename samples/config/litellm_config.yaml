@@ -9,16 +9,6 @@
 # =============================================================================
 
 model_list:
-
-fallbacks:
-  - {"smart": ["gemini-2-5-pro"]}
-  - {"build": ["claude-sonnet-4-6"]}
-  - {"smart-compressed": ["gemini-2-5-pro"]}
-
-general_settings:
-  max_input_tokens: 40960
-  max_output_tokens: 4096
-
   # ── Vertex AI: Gemini models ───────────────────────────────────────────────
   # input_cost_per_token / output_cost_per_token are set explicitly here
   # because LiteLLM's pricing DB does not have a direct key for these
