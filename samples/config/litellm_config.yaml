@@ -9,7 +9,6 @@
 # =============================================================================
 
 model_list:
-
   # ── Vertex AI: Gemini models ───────────────────────────────────────────────
   # input_cost_per_token / output_cost_per_token are set explicitly here
   # because LiteLLM's pricing DB does not have a direct key for these
@@ -210,18 +209,18 @@ model_list:
 router_settings:
   routing_strategy: cost-based-routing
   num_retries: 2
-  timeout: 60
+  timeout: 900
   fallbacks:
     - {"smart": ["gemini-2-5-pro"]}
     - {"build": ["claude-sonnet-4-6"]}
-    - {"smart-compressed": ["gemini-2-5-pro"]}
-    - {"build-compressed": ["claude-sonnet-4-6"]}
+    - {"smart-compressed": ["smart"]}
+    - {"build-compressed": ["build"]}
   context_window_fallbacks:
     - {"qwen3-14b": ["claude-sonnet-4-6"]}
     - {"build": ["claude-sonnet-4-6"]}
-    - {"build-compressed": ["claude-sonnet-4-6"]}
+    - {"build-compressed": ["build"]}
     - {"smart": ["gemini-2-5-pro"]}
-    - {"smart-compressed": ["gemini-2-5-pro"]}
+    - {"smart-compressed": ["smart"]}
 
   # Valkey for shared rate-limit state across restarts
   redis_host: valkey
@@ -249,6 +248,8 @@ guardrails:
 # General proxy settings
 # =============================================================================
 general_settings:
+  max_input_tokens: 40960
+  max_output_tokens: 4096
   master_key: os.environ/LITELLM_MASTER_KEY
   # database_url is passed via DATABASE_URL environment variable in compose
 
