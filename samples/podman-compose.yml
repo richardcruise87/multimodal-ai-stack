@@ -8,9 +8,10 @@
 #   - restart: always  (Podman rootless handles this more reliably than
 #                       unless-stopped in some versions of podman-compose)
 #   - Ollama / custom endpoint URL should use host.containers.internal
-#     (not host.docker.internal) — set via CUSTOM_ENDPOINT_URL in .env
+#     (not host.docker.internal) — set via CUSTOM_ENDPOINT_URL in .endpoints.env
 #
-# Requires: .env, config/litellm_config.yaml, secrets/gcp-credentials.json
+# Requires: .env, .endpoints.env, config/litellm_config.yaml,
+#           secrets/gcp-credentials.json
 # =============================================================================
 
 services:
@@ -53,21 +54,18 @@ services:
     volumes:
       - ./config/litellm_config.yaml:/app/config.yaml:ro,Z
       - ./secrets/gcp-credentials.json:/secrets/gcp-credentials.json:ro,Z
+    env_file:
+      # User-managed: GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION, CUSTOM_ENDPOINT_URL/KEY,
+      # QWEN3_API_BASE/KEY. Not overwritten by setup.py on re-runs.
+      - .endpoints.env
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
-      VERTEX_LOCATION: ${VERTEX_LOCATION}
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
-      CUSTOM_ENDPOINT_URL: ${CUSTOM_ENDPOINT_URL}
-      CUSTOM_ENDPOINT_KEY: ${CUSTOM_ENDPOINT_KEY}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-      # Env vars for custom model endpoints and API keys
-      QWEN3_API_BASE: ${QWEN3_API_BASE}
-      QWEN3_API_KEY: ${QWEN3_API_KEY}
       # Langfuse callback connection
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}

@@ -178,55 +178,100 @@ SAMPLE_SECRETS = {
     "NEXTAUTH_SECRET": "nextauth-secret",
     "SALT": "b" * 32,
     "LANGFUSE_INIT_USER_PASSWORD": "lf-admin-pass",
-    "CUSTOM_ENDPOINT_URL": "http://host.containers.internal:11434/v1",
-    "CUSTOM_ENDPOINT_KEY": "unused",
-    "QWEN3_API_BASE": "https://qwen3.example.com",
-    "QWEN3_API_KEY": "test-qwen3-key",
 }
 
 
 class TestWriteEnv:
     def test_all_keys_present(self, setup, tmp):
-        setup.write_env(tmp, "my-project", "us-central1", SAMPLE_SECRETS, {"url": "x", "key": "y"})
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
         for key in SAMPLE_SECRETS:
             assert key in content
 
-    def test_gcp_vars_written(self, setup, tmp):
-        setup.write_env(tmp, "test-project-id", "europe-west4", SAMPLE_SECRETS, None)
+    def test_endpoint_vars_not_written(self, setup, tmp):
+        """GCP/Vertex/endpoint vars now live in .endpoints.env, not .env."""
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
-        assert "GOOGLE_CLOUD_PROJECT=test-project-id" in content
-        assert "VERTEX_LOCATION=europe-west4" in content
+        for key in (
+            "GOOGLE_CLOUD_PROJECT",
+            "VERTEX_LOCATION",
+            "CUSTOM_ENDPOINT_URL",
+            "CUSTOM_ENDPOINT_KEY",
+            "QWEN3_API_BASE",
+            "QWEN3_API_KEY",
+        ):
+            assert key not in content
 
     def test_salt_key_warning_comment(self, setup, tmp):
-        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
         assert "NEVER change after first use" in content
 
     def test_master_key_value(self, setup, tmp):
-        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
         assert "LITELLM_MASTER_KEY=sk-testkey123" in content
 
-    def test_qwen3_vars_written(self, setup, tmp):
-        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
-        content = (tmp / ".env").read_text()
-        assert "QWEN3_API_BASE=" in content
-        assert "QWEN3_API_KEY=test-qwen3-key" in content
-
     def test_env_ends_with_newline(self, setup, tmp):
-        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
         assert content.endswith("\n")
 
     def test_no_secrets_in_gitignore_scope(self, setup, tmp):
         """Ensure .env file is a flat KEY=VALUE file with no YAML/JSON structure."""
-        setup.write_env(tmp, "p", "us-central1", SAMPLE_SECRETS, None)
+        setup.write_env(tmp, SAMPLE_SECRETS)
         content = (tmp / ".env").read_text()
         # Should not contain YAML/JSON structural characters at line start
         lines = [ln for ln in content.splitlines() if ln and not ln.startswith("#")]
         for line in lines:
             assert "=" in line, f"Expected KEY=VALUE line, got: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# write_endpoints_env
+# ---------------------------------------------------------------------------
+
+
+class TestWriteEndpointsEnv:
+    def test_writes_all_vars(self, setup, tmp):
+        setup.write_endpoints_env(
+            tmp,
+            "my-project",
+            "us-central1",
+            {"url": "http://host.containers.internal:11434/v1", "key": "unused"},
+            {"url": "https://qwen3.example.com", "key": "test-qwen3-key"},
+        )
+        content = (tmp / ".endpoints.env").read_text()
+        assert "GOOGLE_CLOUD_PROJECT=my-project" in content
+        assert "VERTEX_LOCATION=us-central1" in content
+        assert "CUSTOM_ENDPOINT_URL=http://host.containers.internal:11434/v1" in content
+        assert "CUSTOM_ENDPOINT_KEY=unused" in content
+        assert "QWEN3_API_BASE=https://qwen3.example.com" in content
+        assert "QWEN3_API_KEY=test-qwen3-key" in content
+
+    def test_writes_blank_endpoints_when_none(self, setup, tmp):
+        setup.write_endpoints_env(tmp, "my-project", "us-central1", None, None)
+        content = (tmp / ".endpoints.env").read_text()
+        assert "CUSTOM_ENDPOINT_URL=" in content
+        assert "QWEN3_API_BASE=" in content
+
+    def test_skips_and_warns_if_already_exists(self, setup, tmp, capsys):
+        endpoints_path = tmp / ".endpoints.env"
+        endpoints_path.write_text("GOOGLE_CLOUD_PROJECT=existing-project\n")
+
+        setup.write_endpoints_env(tmp, "new-project", "us-central1", None, None)
+
+        # File must remain untouched
+        content = endpoints_path.read_text()
+        assert content == "GOOGLE_CLOUD_PROJECT=existing-project\n"
+
+        captured = capsys.readouterr()
+        assert "Skipped" in captured.out or "already exists" in captured.out
+
+    def test_ends_with_newline(self, setup, tmp):
+        setup.write_endpoints_env(tmp, "p", "us-central1", None, None)
+        content = (tmp / ".endpoints.env").read_text()
+        assert content.endswith("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +284,7 @@ class TestWriteGitignore:
         setup.write_gitignore(tmp)
         content = (tmp / ".gitignore").read_text()
         assert ".env" in content
+        assert ".endpoints.env" in content
         assert "secrets/" in content
 
     def test_appends_to_existing_without_entries(self, setup, tmp):
@@ -246,22 +292,25 @@ class TestWriteGitignore:
         setup.write_gitignore(tmp)
         content = (tmp / ".gitignore").read_text()
         assert ".env" in content
+        assert ".endpoints.env" in content
         assert "secrets/" in content
         assert "*.pyc" in content  # original entry preserved
 
     def test_does_not_duplicate_existing_entries(self, setup, tmp):
-        (tmp / ".gitignore").write_text(".env\nsecrets/\n")
+        (tmp / ".gitignore").write_text(".env\n.endpoints.env\nsecrets/\n")
         setup.write_gitignore(tmp)
-        content = (tmp / ".gitignore").read_text()
-        assert content.count(".env") == 1
-        assert content.count("secrets/") == 1
+        lines = (tmp / ".gitignore").read_text().splitlines()
+        assert lines.count(".env") == 1
+        assert lines.count(".endpoints.env") == 1
+        assert lines.count("secrets/") == 1
 
     def test_partially_missing_entries_appended(self, setup, tmp):
         (tmp / ".gitignore").write_text(".env\n")
         setup.write_gitignore(tmp)
-        content = (tmp / ".gitignore").read_text()
-        assert "secrets/" in content
-        assert content.count(".env") == 1
+        lines = (tmp / ".gitignore").read_text().splitlines()
+        assert ".endpoints.env" in lines
+        assert "secrets/" in lines
+        assert lines.count(".env") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -525,12 +574,25 @@ class TestParseEnv:
 
     def test_roundtrip_with_write_env(self, setup, tmp):
         """parse_env must be able to read back everything write_env writes."""
-        setup.write_env(tmp, "my-project", "us-east1", SAMPLE_SECRETS, None)
+        setup.write_env(tmp, SAMPLE_SECRETS)
         parsed = setup.parse_env(tmp / ".env")
         for key, val in SAMPLE_SECRETS.items():
             assert parsed[key] == val, f"Mismatch for {key}"
+
+    def test_roundtrip_with_write_endpoints_env(self, setup, tmp):
+        """parse_env must be able to read back everything write_endpoints_env writes."""
+        setup.write_endpoints_env(
+            tmp,
+            "my-project",
+            "us-east1",
+            {"url": "http://host.containers.internal:11434/v1", "key": "unused"},
+            {"url": "https://qwen3.example.com", "key": "test-qwen3-key"},
+        )
+        parsed = setup.parse_env(tmp / ".endpoints.env")
         assert parsed["GOOGLE_CLOUD_PROJECT"] == "my-project"
         assert parsed["VERTEX_LOCATION"] == "us-east1"
+        assert parsed["CUSTOM_ENDPOINT_URL"] == "http://host.containers.internal:11434/v1"
+        assert parsed["QWEN3_API_BASE"] == "https://qwen3.example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -694,70 +756,58 @@ _ALL_EXISTING = {
     "NEXTAUTH_SECRET": "existing-nextauth",
     "SALT": "existing-salt-32hexchars!!!!!!!",
     "LANGFUSE_INIT_USER_PASSWORD": "existing-lf-admin-pass",
-    "CUSTOM_ENDPOINT_URL": "",
-    "CUSTOM_ENDPOINT_KEY": "",
-    "QWEN3_API_BASE": "",
-    "QWEN3_API_KEY": "",
 }
 
 
 class TestGenerateSecretsMergeMode:
     def test_preserves_salt_key(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["LITELLM_SALT_KEY"] == _ALL_EXISTING["LITELLM_SALT_KEY"]
 
     def test_preserves_master_key(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["LITELLM_MASTER_KEY"] == _ALL_EXISTING["LITELLM_MASTER_KEY"]
 
     def test_preserves_postgres_password(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["POSTGRES_PASSWORD"] == _ALL_EXISTING["POSTGRES_PASSWORD"]
 
     def test_preserves_valkey_password(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["VALKEY_PASSWORD"] == _ALL_EXISTING["VALKEY_PASSWORD"]
 
     def test_preserves_langfuse_secret_key(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["LANGFUSE_SECRET_KEY"] == _ALL_EXISTING["LANGFUSE_SECRET_KEY"]
 
     def test_preserves_langfuse_public_key(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["LANGFUSE_PUBLIC_KEY"] == _ALL_EXISTING["LANGFUSE_PUBLIC_KEY"]
 
     def test_preserves_nextauth_secret(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["NEXTAUTH_SECRET"] == _ALL_EXISTING["NEXTAUTH_SECRET"]
 
     def test_preserves_salt(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["SALT"] == _ALL_EXISTING["SALT"]
 
     def test_preserves_langfuse_init_password(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         assert result["LANGFUSE_INIT_USER_PASSWORD"] == _ALL_EXISTING["LANGFUSE_INIT_USER_PASSWORD"]
 
     def test_generates_missing_secret_when_absent(self, setup):
         # Existing file has no VALKEY_PASSWORD — merge must generate one
         partial = {k: v for k, v in _ALL_EXISTING.items() if k != "VALKEY_PASSWORD"}
-        result = setup.generate_secrets(None, None, partial)
+        result = setup.generate_secrets(partial)
         assert "VALKEY_PASSWORD" in result
         assert result["VALKEY_PASSWORD"] != ""
-
-    def test_endpoint_values_come_from_prompt_args(self, setup):
-        # Even in merge mode, if the user provided a new endpoint via prompt
-        # steps, its values should appear in the output.
-        qwen = {"url": "https://new-qwen.example.com/v1", "key": "new-key"}
-        result = setup.generate_secrets(None, qwen, _ALL_EXISTING)
-        assert result["QWEN3_API_BASE"] == "https://new-qwen.example.com/v1"
-        assert result["QWEN3_API_KEY"] == "new-key"
 
     def test_fresh_install_generates_all_secrets(self, setup):
         # Fresh-install mode prompts for master key / Langfuse password override;
         # patch input() to press Enter (accept generated values) for both prompts.
         with patch("builtins.input", return_value=""):
-            result = setup.generate_secrets(None, None, None)
+            result = setup.generate_secrets(None)
         for key in [
             "LITELLM_MASTER_KEY",
             "LITELLM_SALT_KEY",
@@ -774,11 +824,11 @@ class TestGenerateSecretsMergeMode:
 
     def test_fresh_install_master_key_has_sk_prefix(self, setup):
         with patch("builtins.input", return_value=""):
-            result = setup.generate_secrets(None, None, None)
+            result = setup.generate_secrets(None)
         assert result["LITELLM_MASTER_KEY"].startswith("sk-")
 
     def test_merge_result_contains_all_required_keys(self, setup):
-        result = setup.generate_secrets(None, None, _ALL_EXISTING)
+        result = setup.generate_secrets(_ALL_EXISTING)
         required = [
             "LITELLM_MASTER_KEY",
             "LITELLM_SALT_KEY",
@@ -791,13 +841,22 @@ class TestGenerateSecretsMergeMode:
             "NEXTAUTH_SECRET",
             "SALT",
             "LANGFUSE_INIT_USER_PASSWORD",
+        ]
+        for key in required:
+            assert key in result, f"Missing key: {key}"
+
+    def test_merge_result_excludes_endpoint_keys(self, setup):
+        # Endpoint/GCP config now lives in .endpoints.env, not the secrets dict.
+        result = setup.generate_secrets(_ALL_EXISTING)
+        for key in (
+            "GOOGLE_CLOUD_PROJECT",
+            "VERTEX_LOCATION",
             "CUSTOM_ENDPOINT_URL",
             "CUSTOM_ENDPOINT_KEY",
             "QWEN3_API_BASE",
             "QWEN3_API_KEY",
-        ]
-        for key in required:
-            assert key in result, f"Missing key: {key}"
+        ):
+            assert key not in result
 
 
 # ---------------------------------------------------------------------------

@@ -52,9 +52,9 @@ chmod 600 secrets/gcp-credentials.json
 
 ---
 
-## Step 3: Environment File
+## Step 3: Environment Files
 
-Create `.env` with all secrets. Replace every placeholder with real values:
+Create `.env` with generated secrets. Replace every placeholder with real values:
 
 ```bash
 cat > .env << 'EOF'
@@ -78,14 +78,23 @@ LANGFUSE_PUBLIC_KEY=lf-public-changeme
 # Generate with: openssl rand -base64 32
 NEXTAUTH_SECRET=nextauth-secret-changeme
 SALT=langfuse-salt-changeme
+EOF
+```
 
+Create `.endpoints.env` with your GCP/Vertex project and any optional custom
+endpoints. This file is user-managed — the setup script never overwrites it
+once it exists, so you can freely edit endpoint URLs/keys later without
+losing changes on the next upgrade:
+
+```bash
+cat > .endpoints.env << 'EOF'
 # ── GCP / Vertex AI ───────────────────────────────────────────────────────────
 GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
 VERTEX_LOCATION=<your-gcp-region>
 
 # ── Custom OpenAI-compatible endpoint (e.g. Ollama) ──────────────────────────
 # Leave blank if not using
-CUSTOM_ENDPOINT_URL=http://host.docker.internal:11434/v1
+CUSTOM_ENDPOINT_URL=http://host.containers.internal:11434/v1
 CUSTOM_ENDPOINT_KEY=unused
 
 # ── Qwen3-14B (custom external endpoint) ─────────────────────────────────────
@@ -94,7 +103,7 @@ QWEN3_API_KEY=<your-bearer-token-here>
 EOF
 ```
 
-> **Security:** Add `.env` to `.gitignore`. Never commit it.
+> **Security:** Add both `.env` and `.endpoints.env` to `.gitignore`. Never commit either.
 
 ---
 
@@ -314,20 +323,18 @@ services:
     volumes:
       - ./config/litellm_config.yaml:/app/config.yaml:ro
       - ./secrets/gcp-credentials.json:/secrets/gcp-credentials.json:ro
+    env_file:
+      # User-managed: GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION, CUSTOM_ENDPOINT_URL/KEY,
+      # QWEN3_API_BASE/KEY. Not overwritten by setup.py on re-runs.
+      - .endpoints.env
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
-      VERTEX_LOCATION: ${VERTEX_LOCATION}
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
-      CUSTOM_ENDPOINT_URL: ${CUSTOM_ENDPOINT_URL}
-      CUSTOM_ENDPOINT_KEY: ${CUSTOM_ENDPOINT_KEY}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-      QWEN3_API_BASE: ${QWEN3_API_BASE}
-      QWEN3_API_KEY: ${QWEN3_API_KEY}
       # Langfuse connection for callbacks
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
@@ -750,9 +757,12 @@ When the script detects an existing `.env`, it will offer three options:
 Preserves all existing secrets and passwords while updating configuration files from the latest templates. Use this when you want to:
 
 - Enable Headroom token compression on an existing stack
-- Add a new model endpoint (Qwen3, Ollama)
 - Update `podman-compose.yml` or `litellm_config.yaml` to the latest version
-- Change your GCP project or region
+
+To add a new model endpoint (Qwen3, Ollama) or change your GCP project/region,
+edit `.endpoints.env` directly — the setup script never touches this file once
+it exists, so your changes always take effect on the next `podman compose up -d`
+without needing to re-run setup.
 
 What merge keeps:
 
@@ -789,6 +799,10 @@ The following files will be overwritten:
 
 Create numbered backups of existing files? [Y/n]:
 ```
+
+Note: `.endpoints.env` is never listed here and never overwritten — it's
+user-managed. If it already exists, setup skips it and prints a warning
+instead.
 
 Backups use incremental `.bak.N` suffixes and preserve directory structure:
 

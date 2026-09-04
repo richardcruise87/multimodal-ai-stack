@@ -6,7 +6,8 @@ Run from the repository root:
     python setup.py
 
 Creates a stack directory (default: ~/ai-stack/) containing:
-    .env                        — all secrets and config
+    .env                        — generated secrets (passwords, keys)
+    .endpoints.env              — user-managed GCP/Vertex + custom endpoint config
     podman-compose.yml          — Podman Compose service definitions
     config/litellm_config.yaml  — LiteLLM proxy configuration
     secrets/                    — GCP credentials (symlink or copy)
@@ -16,6 +17,10 @@ When an existing .env is detected the script offers three modes:
     Merge    — preserve existing secrets, add/update configuration (default)
     Overwrite — regenerate all secrets (requires double confirmation; data loss)
     Abort    — exit without making any changes
+
+.endpoints.env is never overwritten once created — it is user-managed, so
+manual edits (e.g. changing a custom endpoint URL) are never clobbered by
+re-running this script.
 """
 
 import secrets
@@ -161,6 +166,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 SAMPLE_COMPOSE = REPO_ROOT / "samples" / "podman-compose.yml"
 SAMPLE_OPENCODE = REPO_ROOT / "samples" / "opencode.jsonc"
 SAMPLE_CLAUDE = REPO_ROOT / "samples" / "claude-settings.json"
+SAMPLE_SYSTEMD = REPO_ROOT / "samples" / "aimstack.service"
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +184,8 @@ def print_banner():
 
       This script will create a stack directory containing:
 
-        • .env                        (all secrets — never commit this)
+        • .env                        (generated secrets — never commit this)
+        • .endpoints.env              (user-managed endpoint config — never commit this)
         • podman-compose.yml          (Podman Compose service definitions)
         • config/litellm_config.yaml  (LiteLLM proxy configuration)
         • secrets/                    (GCP credentials)
@@ -195,7 +202,7 @@ def print_banner():
 
 
 def get_output_dir():
-    section("Step 1 of 10 — Output directory")
+    section("Step 1 of 11 — Output directory")
     default = str(Path.home() / "ai-stack")
     raw = prompt("Stack directory", default=default)
     out = Path(raw).expanduser().resolve()
@@ -275,7 +282,7 @@ def check_existing_env(out_dir: Path) -> Optional[Dict[str, str]]:
     if not env_path.exists():
         return None  # Fresh install — nothing to worry about
 
-    section("Step 2 of 10 — Existing .env detected")
+    section("Step 2 of 11 — Existing .env detected")
     print(yellow(f"  Found existing .env at: {env_path}"))
     print()
 
@@ -306,6 +313,20 @@ def check_existing_env(out_dir: Path) -> Optional[Dict[str, str]]:
     print()
     print(green("  Merge mode: existing secrets will be preserved."))
     return parse_env(env_path)
+
+
+def check_existing_endpoints_env(out_dir: Path) -> Optional[Dict[str, str]]:
+    """
+    Parse .endpoints.env if it exists, so prompt steps (GCP/Vertex, Qwen3,
+    custom endpoint) can show current values as defaults.
+
+    Unlike .env, this file is never overwritten by setup.py once created —
+    there is no merge/overwrite/abort choice here, just a silent read.
+    """
+    endpoints_path = out_dir / ".endpoints.env"
+    if not endpoints_path.exists():
+        return None
+    return parse_env(endpoints_path)
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +436,7 @@ def setup_gcp_credentials(out_dir: Path, existing_secrets: Optional[Dict] = None
     Choosing 'skip' at any point returns None, which signals apply_gcp_credentials
     to leave existing credentials untouched.
     """
-    section("Step 3 of 10 — GCP credentials")
+    section("Step 3 of 11 — GCP credentials")
     secrets_dir = out_dir / "secrets"
     dest = secrets_dir / "gcp-credentials.json"
 
@@ -470,17 +491,19 @@ def setup_gcp_credentials(out_dir: Path, existing_secrets: Optional[Dict] = None
 # ---------------------------------------------------------------------------
 
 
-def get_gcp_config(existing_secrets: Optional[Dict] = None):
+def get_gcp_config(existing_endpoints: Optional[Dict] = None):
     """
     Step 4: GCP project ID and Vertex AI location.
 
-    In merge mode the current values are shown and kept by default.
+    existing_endpoints comes from an existing .endpoints.env (or, for
+    stacks upgrading from before the .env/.endpoints.env split, from the
+    old .env). If present, current values are shown and kept by default.
     """
-    section("Step 4 of 10 — GCP / Vertex AI project")
+    section("Step 4 of 11 — GCP / Vertex AI project")
 
-    if existing_secrets:
-        current_project = existing_secrets.get("GOOGLE_CLOUD_PROJECT", "")
-        current_location = existing_secrets.get("VERTEX_LOCATION", "us-central1")
+    if existing_endpoints:
+        current_project = existing_endpoints.get("GOOGLE_CLOUD_PROJECT", "")
+        current_location = existing_endpoints.get("VERTEX_LOCATION", "us-central1")
         if current_project:
             print(f"  Current project:  {cyan(current_project)}")
             print(f"  Current location: {cyan(current_location)}")
@@ -503,23 +526,25 @@ def get_gcp_config(existing_secrets: Optional[Dict] = None):
 # ---------------------------------------------------------------------------
 
 
-def get_qwen3_endpoint(existing_secrets: Optional[Dict] = None):
+def get_qwen3_endpoint(existing_endpoints: Optional[Dict] = None):
     """
     Step 5: optional external Qwen3-14B vLLM endpoint.
 
-    In merge mode, an existing URL is shown and kept by default.
+    existing_endpoints comes from an existing .endpoints.env (or, for
+    stacks upgrading from before the .env/.endpoints.env split, from the
+    old .env). If present, the existing URL is shown and kept by default.
     """
-    section("Step 5 of 10 — Qwen3-14B endpoint")
+    section("Step 5 of 11 — Qwen3-14B endpoint")
 
-    if existing_secrets:
-        existing_url = existing_secrets.get("QWEN3_API_BASE", "")
+    if existing_endpoints:
+        existing_url = existing_endpoints.get("QWEN3_API_BASE", "")
         if existing_url:
             print(f"  Currently configured: {cyan(existing_url)}")
             print()
             if prompt_yes_no("Keep existing Qwen3 endpoint?", default=True):
                 return {
                     "url": existing_url,
-                    "key": existing_secrets.get("QWEN3_API_KEY", ""),
+                    "key": existing_endpoints.get("QWEN3_API_KEY", ""),
                 }
             print()
 
@@ -550,23 +575,25 @@ def get_qwen3_endpoint(existing_secrets: Optional[Dict] = None):
 # ---------------------------------------------------------------------------
 
 
-def get_custom_endpoint(existing_secrets: Optional[Dict] = None):
+def get_custom_endpoint(existing_endpoints: Optional[Dict] = None):
     """
     Step 6: optional local model server (Ollama / OpenAI-compatible).
 
-    In merge mode, an existing URL is shown and kept by default.
+    existing_endpoints comes from an existing .endpoints.env (or, for
+    stacks upgrading from before the .env/.endpoints.env split, from the
+    old .env). If present, the existing URL is shown and kept by default.
     """
-    section("Step 6 of 10 — Local model endpoint (Ollama / custom)")
+    section("Step 6 of 11 — Local model endpoint (Ollama / custom)")
 
-    if existing_secrets:
-        existing_url = existing_secrets.get("CUSTOM_ENDPOINT_URL", "")
+    if existing_endpoints:
+        existing_url = existing_endpoints.get("CUSTOM_ENDPOINT_URL", "")
         if existing_url:
             print(f"  Currently configured: {cyan(existing_url)}")
             print()
             if prompt_yes_no("Keep existing custom endpoint?", default=True):
                 return {
                     "url": existing_url,
-                    "key": existing_secrets.get("CUSTOM_ENDPOINT_KEY", ""),
+                    "key": existing_endpoints.get("CUSTOM_ENDPOINT_KEY", ""),
                 }
             print()
 
@@ -607,7 +634,7 @@ def get_headroom_config(existing_secrets: Optional[Dict] = None):
     this prompt on every merge run.  This is intentional — it lets them toggle
     Headroom on or off during any upgrade without storing extra state in .env.
     """
-    section("Step 7 of 10 — Headroom token compression (optional)")
+    section("Step 7 of 11 — Headroom token compression (optional)")
 
     if existing_secrets is not None:
         print("  Headroom is optional token compression (15–95% savings).")
@@ -643,8 +670,6 @@ def get_headroom_config(existing_secrets: Optional[Dict] = None):
 
 
 def generate_secrets(
-    custom_endpoint,
-    qwen3_endpoint,
     existing_secrets: Optional[Dict] = None,
 ) -> Dict[str, str]:
     """
@@ -659,11 +684,10 @@ def generate_secrets(
     mode (the existing key is always preserved).  The Langfuse admin password
     override is likewise suppressed — it was already set at first install.
 
-    Endpoint URLs/keys follow the values returned by get_qwen3_endpoint() and
-    get_custom_endpoint(), which in merge mode already contain the preserved or
-    updated values chosen by the user.
+    Endpoint URLs/keys and GCP/Vertex config live in .endpoints.env, written
+    separately by write_endpoints_env() and not part of this secrets dict.
     """
-    section("Step 8 of 10 — Secrets")
+    section("Step 8 of 11 — Secrets")
     merge = existing_secrets is not None
 
     if merge:
@@ -727,12 +751,6 @@ def generate_secrets(
         if overridden_lf:
             langfuse_init_password = overridden_lf
 
-    # --- Endpoint config: use values from prompt steps (already merged there) ---
-    custom_url = custom_endpoint["url"] if custom_endpoint else ""
-    custom_key = custom_endpoint["key"] if custom_endpoint else ""
-    qwen3_url = qwen3_endpoint["url"] if qwen3_endpoint else ""
-    qwen3_key = qwen3_endpoint["key"] if qwen3_endpoint else ""
-
     return {
         "LITELLM_MASTER_KEY": master_key,
         "LITELLM_SALT_KEY": salt_key,
@@ -745,10 +763,6 @@ def generate_secrets(
         "NEXTAUTH_SECRET": nextauth_secret,
         "SALT": langfuse_salt,
         "LANGFUSE_INIT_USER_PASSWORD": langfuse_init_password,
-        "CUSTOM_ENDPOINT_URL": custom_url,
-        "CUSTOM_ENDPOINT_KEY": custom_key,
-        "QWEN3_API_BASE": qwen3_url,
-        "QWEN3_API_KEY": qwen3_key,
     }
 
 
@@ -757,7 +771,7 @@ def generate_secrets(
 # ---------------------------------------------------------------------------
 
 
-def write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint):
+def write_env(out_dir, sec):
     lines = [
         "# ── LiteLLM ──────────────────────────────────────────────────────────────────",
         f"LITELLM_MASTER_KEY={sec['LITELLM_MASTER_KEY']}",
@@ -779,23 +793,52 @@ def write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint):
         f"NEXTAUTH_SECRET={sec['NEXTAUTH_SECRET']}",
         f"SALT={sec['SALT']}",
         f"LANGFUSE_INIT_USER_PASSWORD={sec['LANGFUSE_INIT_USER_PASSWORD']}",
-        "",
+    ]
+    env_path = out_dir / ".env"
+    env_path.write_text("\n".join(lines) + "\n")
+    print(f"  {green('✓')} Written: {env_path}")
+
+
+def write_endpoints_env(out_dir, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint):
+    """
+    Write .endpoints.env — a user-managed file holding GCP/Vertex config and
+    optional custom endpoint URLs/keys.
+
+    This file is intentionally NOT regenerated on re-runs: if it already
+    exists, setup skips it and warns the user, so manual edits (e.g. someone
+    switching CUSTOM_ENDPOINT_URL to a new Ollama host) are never clobbered.
+    """
+    endpoints_path = out_dir / ".endpoints.env"
+    if endpoints_path.exists():
+        print(
+            yellow(f"  Skipped: {endpoints_path} already exists (user-managed, not overwritten).")
+        )
+        return
+
+    custom_url = custom_endpoint["url"] if custom_endpoint else ""
+    custom_key = custom_endpoint["key"] if custom_endpoint else ""
+    qwen3_url = qwen3_endpoint["url"] if qwen3_endpoint else ""
+    qwen3_key = qwen3_endpoint["key"] if qwen3_endpoint else ""
+
+    lines = [
         "# ── GCP / Vertex AI ───────────────────────────────────────────────────────────",
         f"GOOGLE_CLOUD_PROJECT={gcp_project}",
         f"VERTEX_LOCATION={vertex_location}",
         "",
         "# ── Custom OpenAI-compatible endpoint (e.g. Ollama) ──────────────────────────",
         "# Leave blank if not using a local model endpoint.",
-        f"CUSTOM_ENDPOINT_URL={sec['CUSTOM_ENDPOINT_URL']}",
-        f"CUSTOM_ENDPOINT_KEY={sec['CUSTOM_ENDPOINT_KEY']}",
+        f"CUSTOM_ENDPOINT_URL={custom_url}",
+        f"CUSTOM_ENDPOINT_KEY={custom_key}",
         "",
         "# ── Qwen3-14B (external OpenAI-compatible / vLLM endpoint) ────────────────────",
-        f"QWEN3_API_BASE={sec['QWEN3_API_BASE']}",
-        f"QWEN3_API_KEY={sec['QWEN3_API_KEY']}",
+        f"QWEN3_API_BASE={qwen3_url}",
+        f"QWEN3_API_KEY={qwen3_key}",
+        "",
+        "# This file is user-managed: setup.py will not overwrite it on re-runs.",
+        "# Edit it directly to change endpoint URLs/keys or GCP project settings.",
     ]
-    env_path = out_dir / ".env"
-    env_path.write_text("\n".join(lines) + "\n")
-    print(f"  {green('✓')} Written: {env_path}")
+    endpoints_path.write_text("\n".join(lines) + "\n")
+    print(f"  {green('✓')} Written: {endpoints_path}")
 
 
 def build_litellm_config(custom_endpoint, headroom=None):
@@ -1204,7 +1247,7 @@ def write_compose(out_dir):
 
 def write_gitignore(out_dir):
     gitignore = out_dir / ".gitignore"
-    required = [".env", "secrets/"]
+    required = [".env", ".endpoints.env", "secrets/"]
     if gitignore.exists():
         existing = gitignore.read_text()
         lines_to_add = [e for e in required if e not in existing.splitlines()]
@@ -1213,7 +1256,7 @@ def write_gitignore(out_dir):
                 f.write("\n" + "\n".join(lines_to_add) + "\n")
             print(f"  {green('✓')} Updated: {gitignore} (added: {', '.join(lines_to_add)})")
         else:
-            print(f"  {green('✓')} .gitignore already covers .env and secrets/")
+            print(f"  {green('✓')} .gitignore already covers .env, .endpoints.env and secrets/")
     else:
         gitignore.write_text("\n".join(required) + "\n")
         print(f"  {green('✓')} Written: {gitignore}")
@@ -1297,6 +1340,70 @@ def write_claude_config(sec):
 
     dest.write_text(content)
     print(f"  {green('✓')} Written: {dest}")
+
+
+def write_systemd_service(out_dir: Path) -> None:
+    """
+    Step 11: optionally configure a systemd user service for the AI stack.
+
+    Reads samples/aimstack.service, substitutes {STACK_DIR} and {PODMAN_PATH}
+    placeholders, and writes the result to
+    ~/.config/systemd/user/aimstack.service if the user opts in.
+    """
+    section("Step 11 of 11 — Systemd service configuration (optional)")
+
+    print(
+        textwrap.dedent("""\
+      Configure a systemd user service to manage the AI stack?
+      This creates a unit that starts/stops the podman-compose stack and
+      loads environment variables from the stack's .env file.
+    """)
+    )
+
+    if not prompt_yes_no("Enable systemd service for AI stack?", default=False):
+        print(yellow("  Skipping systemd service configuration."))
+        return
+
+    podman_path = shutil.which("podman")
+    if not podman_path:
+        print(red("  Error: podman not found in PATH."))
+        print(red("  Skipping systemd service configuration."))
+        return
+
+    if not SAMPLE_SYSTEMD.exists():
+        print(red(f"  Error: template not found: {SAMPLE_SYSTEMD}"))
+        print(red("  Skipping systemd service configuration."))
+        return
+
+    template = SAMPLE_SYSTEMD.read_text()
+    service_content = template.replace("{STACK_DIR}", str(out_dir))
+    service_content = service_content.replace("{PODMAN_PATH}", podman_path)
+
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    systemd_dir.mkdir(parents=True, exist_ok=True)
+    service_file = systemd_dir / "aimstack.service"
+
+    try:
+        service_file.write_text(service_content)
+    except Exception as e:
+        print(red(f"  Failed to write systemd service: {e}"))
+        return
+
+    print(f"  {green('✓')} Written: {service_file}")
+    print()
+    print(green("  To enable and start the service, run:"))
+    print("    systemctl --user daemon-reload")
+    print("    systemctl --user enable aimstack.service")
+    print("    systemctl --user start aimstack.service")
+    print()
+    print(green("  To view logs:"))
+    print("    journalctl --user -u aimstack.service -f")
+    print()
+    print(green("  To stop the service:"))
+    print("    systemctl --user stop aimstack.service")
+    print()
+    print(yellow("  Note: the service loads environment variables from"))
+    print(yellow(f"        {out_dir}/.env and {out_dir}/.endpoints.env via EnvironmentFile."))
 
 
 def apply_gcp_credentials(gcp_creds, out_dir):
@@ -1480,7 +1587,7 @@ def get_ai_harness_config():
       }
     or None if the user skips entirely or all harnesses resolve to keep-existing.
     """
-    section("Step 10 of 10 — AI harness configuration (optional)")
+    section("Step 10 of 11 — AI harness configuration (optional)")
 
     print(
         textwrap.dedent("""\
@@ -1602,6 +1709,9 @@ def print_summary(
     row("LANGFUSE_PUBLIC_KEY", sec["LANGFUSE_PUBLIC_KEY"])
     row("NEXTAUTH_SECRET", sec["NEXTAUTH_SECRET"])
     row("LANGFUSE_INIT_USER_PASSWORD", sec["LANGFUSE_INIT_USER_PASSWORD"])
+
+    print()
+    print(cyan("  Written to .endpoints.env (user-managed — not overwritten on re-runs):"))
     row("GOOGLE_CLOUD_PROJECT", gcp_project)
     row("VERTEX_LOCATION", vertex_location)
 
@@ -1727,15 +1837,23 @@ def main():
     # Step 2: existing .env — returns None (fresh/overwrite) or dict (merge)
     existing_secrets = check_existing_env(out_dir)
 
+    # Existing .endpoints.env (if any) supplies defaults for the GCP/Vertex
+    # and custom endpoint prompts below. Falls back to values from an old
+    # .env (pre-split) so upgrading stacks don't lose their configuration.
+    existing_endpoints = check_existing_endpoints_env(out_dir)
+    existing_endpoint_defaults = existing_endpoints
+    if existing_endpoint_defaults is None and existing_secrets is not None:
+        existing_endpoint_defaults = existing_secrets
+
     gcp_creds = setup_gcp_credentials(out_dir, existing_secrets)
-    gcp_project, vertex_location = get_gcp_config(existing_secrets)
-    qwen3_endpoint = get_qwen3_endpoint(existing_secrets)
-    custom_endpoint = get_custom_endpoint(existing_secrets)
+    gcp_project, vertex_location = get_gcp_config(existing_endpoint_defaults)
+    qwen3_endpoint = get_qwen3_endpoint(existing_endpoint_defaults)
+    custom_endpoint = get_custom_endpoint(existing_endpoint_defaults)
     headroom = get_headroom_config(existing_secrets)
-    sec = generate_secrets(custom_endpoint, qwen3_endpoint, existing_secrets)
+    sec = generate_secrets(existing_secrets)
 
     # Confirm before writing
-    section("Step 9 of 10 — Writing files")
+    section("Step 9 of 11 — Writing files")
     print(f"  Output directory: {cyan(str(out_dir))}")
     if existing_secrets is not None:
         print(green("  Mode: MERGE (existing secrets preserved)"))
@@ -1756,7 +1874,8 @@ def main():
 
     # Write files
     apply_gcp_credentials(gcp_creds, out_dir)
-    write_env(out_dir, gcp_project, vertex_location, sec, custom_endpoint)
+    write_env(out_dir, sec)
+    write_endpoints_env(out_dir, gcp_project, vertex_location, custom_endpoint, qwen3_endpoint)
     write_litellm_config(out_dir, custom_endpoint, headroom=headroom)
     write_compose(out_dir)
     write_gitignore(out_dir)
@@ -1781,6 +1900,9 @@ def main():
             write_opencode_langfuse_config(sec, username)
         if harness_config.get("claude"):
             write_claude_config(sec)
+
+    # Step 11: Systemd service configuration
+    write_systemd_service(out_dir)
 
     print_summary(
         out_dir,
